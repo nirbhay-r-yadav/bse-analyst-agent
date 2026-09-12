@@ -6,278 +6,128 @@
 
 ## 1. Product Goal
 
-The project should evolve into a practical, evidence-based stock research system that helps identify promising multibagger candidates.
+Build a practical, evidence-based stock research system that helps identify promising multibagger candidates.
 
-The system should not make decisions from a single metric or from LLM opinion. Financial calculations must be deterministic, validated, and traceable to data sources.
+The system should:
 
-## 2. Staged Analysis Pipeline
+- combine multiple independent evidence layers rather than rely on a single metric;
+- use deterministic, validated financial calculations;
+- keep LLM analysis focused on research, evidence extraction, and explanation rather than inventing financial conclusions;
+- produce traceable, evidence-backed candidates for further investment research.
 
-```text
-MARKET
-  ↓
-Universe Scanner
-  ↓
-Financial Pre-Screen
-  ↓
-Financial Engine
-  ↓
-Governance / Forensic Engine + Management Execution Engine
-  ↓
-Deep Research
-  ↓
-Valuation
-  ↓
-Decision Engine
-  ↓
-Multibagger Candidates
-```
-
-### Target scale
-
-- **2,000–3,000 stocks:** cheap universe/market screening
-- **~100–300:** financial pre-screen
-- **~30–50:** full validated Financial Engine
-- **~10–20:** governance/forensics + management execution
-- **~5–10:** deep research + valuation + final decision
-
-The full financial engine should **not** run across thousands of stocks.
-
-## 3. Ownership Principle
-
-**One calculation, one authoritative owner.**
-
-- Revenue CAGR, PAT CAGR, ROCE, ROE, margins, debt, cash flow → **Financial Engine**
-- Management promises, actions, and execution → **Management Execution Engine**
-- Accounting/governance red flags → **Governance / Forensic Engine**
-- Business model, industry, moat, growth runway, competition → **Deep Research**
-- Fair value and scenario analysis → **Valuation Engine**
-- BUY / WATCHLIST / AVOID → **Decision Engine**
-
-Cheap pre-screening may use the same metric definitions as the full Financial Engine, but with lower-cost data and shallower validation. It must not create a second conflicting definition of the metric.
-
-## 4. Financial Engine Scope
-
-The Financial Engine answers:
-
-1. Is the company growing?
-2. Is growth profitable?
-3. Does the company earn good returns on capital/equity?
-4. Does accounting profit turn into cash?
-5. Is the balance sheet safe?
-6. Can the company reinvest successfully?
-
-### Core annual inputs
-
-Preferred record structure:
+## 2. Architecture
 
 ```text
-FY
-Revenue
-EBIT / Operating Profit
-PAT
-Total Debt
-Equity
-Cash
-CFO
-Interest Expense
-Capex
+                              MARKET
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │ Universe Scanner │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │ Financial        │
+                       │ Pre-Screen       │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │ Financial        │
+                       │ Analysis Engine  │
+                       └────────┬─────────┘
+                                │
+                 ┌──────────────┴──────────────┐
+                 ▼                             ▼
+       ┌────────────────────┐       ┌────────────────────────┐
+       │ Governance /       │       │ Management Execution   │
+       │ Forensic Engine    │       │ Engine                 │
+       └──────────┬─────────┘       └───────────┬────────────┘
+                  └──────────────┬──────────────┘
+                                 ▼
+                       ┌──────────────────┐
+                       │ Deep Research    │
+                       │ Business / Moat  │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │ Valuation Engine │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │ Decision Engine  │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │   Multibagger    │
+                       │   Candidates     │
+                       └──────────────────┘
 ```
 
-Preferred history: **5 valid fiscal years**.  
-Minimum for the full engine: **3 valid fiscal years**.
+## 3. Responsibility of Each Layer
 
-Missing data must remain missing/unavailable. It must never silently become zero.
+| Layer | Responsibility |
+|---|---|
+| **Universe Scanner** | Identify the investable market universe efficiently. |
+| **Financial Pre-Screen** | Cheaply reduce the universe using consistent financial definitions. |
+| **Financial Analysis Engine** | Deterministically validate and analyze financial performance, profitability, returns, cash flow, balance sheet, and reinvestment capacity. |
+| **Governance / Forensic Engine** | Detect accounting, governance, and forensic red flags. |
+| **Management Execution Engine** | Compare management statements and commitments with later actions and outcomes. |
+| **Deep Research** | Analyze business model, industry, moat, competition, growth runway, and other qualitative evidence. |
+| **Valuation Engine** | Estimate value using transparent valuation methods and scenarios. |
+| **Decision Engine** | Combine the evidence layers into a final deterministic investment classification. |
 
-Fiscal years must be real, unique, validated, and chronological.
+## 4. Core Design Principles
 
-## 5. Metrics to Review
+### One calculation, one authoritative owner
 
-Before changing code, review each metric one at a time and decide **Keep / Change / Remove / Add**.
+A metric should have one authoritative definition and calculation owner. Other stages may reuse its result, but should not create conflicting versions.
 
-Order:
+### Deterministic financial analysis
 
-1. Revenue growth / CAGR
-2. PAT growth / CAGR
-3. PAT margin and margin trend
-4. ROCE
-5. ROE
-6. Debt / Equity
-7. Net debt
-8. Interest coverage
-9. CFO / PAT
-10. Cash-flow consistency
-11. Capex / reinvestment
-12. Overall financial-quality score
-13. Multibagger-specific additions/exclusions
+Financial calculations and financial scoring must be deterministic, validated, testable, and traceable to source data.
 
-For every metric, document:
+### Evidence over opinion
 
-- What it measures
-- Why it matters
-- Exact input fields
-- Preferred source
-- Validation rules
-- Whether it is a pre-screen or full-engine metric
-- Industry exceptions
-- Meaning when data is unavailable
+LLMs may help extract, compare, summarize, and explain evidence. They should not replace validated financial calculations or make unsupported investment judgments.
 
-## 6. Current Financial Metrics
+### Separate responsibilities
 
-The existing engine calculates or exposes:
+Financial quality, governance, management execution, business research, valuation, and final decision-making remain distinct layers.
 
-- Revenue CAGR
-- PAT CAGR
-- Revenue YoY
-- PAT YoY
-- PAT margin
-- Margin trend / stability
-- ROCE
-- ROE
-- Debt / Equity
-- Net debt
-- Interest coverage
-- CFO / PAT
-- Positive CFO years
-- Average CFO / PAT
-- Financial quality score
-- P/E valuation separately
+### Staged processing
 
-These are **not automatically accepted as final**. Each will be reviewed against the multibagger goal and validated data requirements before being changed.
-
-## 7. Financial Quality vs Valuation
-
-Keep these concepts separate:
-
-- **Financial quality:** Is this a good business financially?
-- **Valuation:** How much are we paying for it?
-
-A high-quality company can be too expensive. A cheap company can be low quality.
-
-Valuation should therefore remain a separate layer from core financial quality.
-
-## 8. Data Source Strategy
-
-Do not prematurely declare one source as the permanent primary source.
-
-First define the financial data contract and validation rules. Then objectively test sources against that contract.
-
-### Source roles
-
-- **Regulatory/company filings:** preferred authoritative evidence where feasible.
-- **Structured financial providers such as Screener:** useful for structured P&L, balance sheet, cash flow, and annual financial history; must pass validation.
-- **Yahoo/NSE market data:** primarily useful for price, market cap, historical prices, volume, and market information. Yahoo should not automatically be treated as the preferred accounting-statement source.
-- **Annual reports:** primary evidence for management commentary, commitments, actions, governance/accounting context, unusual items, explanations, and verification. They are not simply another raw-number feed.
-
-Source choice should depend on the **fact being established**, not a blanket source preference.
-
-## 9. Annual Report / Management Execution Layer
-
-Annual reports should eventually support a separate Management Execution Engine.
-
-Concept:
+The system should become progressively more expensive and deeper as a stock survives each stage:
 
 ```text
-Management says X
-      ↓
-Extract measurable commitment
-      ↓
-Find later evidence
-      ↓
-Compare actual action
-      ↓
-Compare business/financial outcome
-      ↓
-Execution assessment
+Thousands of stocks
+        ↓
+Cheap screening
+        ↓
+Hundreds
+        ↓
+Financial analysis
+        ↓
+Tens
+        ↓
+Governance + management execution
+        ↓
+Small shortlist
+        ↓
+Deep research + valuation
+        ↓
+Multibagger candidates
 ```
 
-Examples of trackable commitments:
+The full Financial Analysis Engine should not be unnecessarily run across the entire market universe.
 
-- Capacity expansion
-- Capex plans
-- Debt reduction
-- Margin targets
-- New products
-- New markets
-- Acquisitions
-- Plants / facilities
-- Investment plans
+## 5. Long-Term Objective
 
-The system should compare claims with later evidence rather than asking an LLM to simply label management as good or bad.
+The finished system should help answer:
 
-## 10. Validation Rules / Known Problems
+> **Which companies have the combination of financial quality, durable growth, management execution, governance quality, business strength, and reasonable valuation that makes them worth researching as potential multibaggers?**
 
-The current financial pipeline has produced examples of invalid financial histories and bogus ratios. These must be eliminated before the engine is considered reliable.
-
-Known failure patterns include:
-
-- Fiscal years returned out of order
-- Missing fiscal years
-- Zero-valued financial years entering ratio calculations
-- Invalid starting revenue/PAT producing misleading CAGR values
-- Missing data being represented as zero
-- Ambiguous handling of zero interest expense
-- Misleading fixed labels such as “Average CFO / PAT (5Y)” when fewer years are available
-- Weak Pydantic validation of chronological/unique fiscal years
-
-Required principle:
-
-> **Invalid financial data must fail validation or be marked unavailable; it must never produce a confident financial conclusion.**
-
-## 11. Industry Exceptions
-
-Industrial-company metrics must not be blindly applied to every sector.
-
-Banks, insurers, and other financial businesses may require different measures for profitability, leverage, capital adequacy, and cash flow.
-
-Industry classification should eventually determine which financial metric contract is appropriate.
-
-## 12. Current Phase
-
-### Phase 1 — Improve Financial Analysis Engine
-
-We are **not** doing a broad rewrite now.
-
-The immediate task is to walk through the Financial Engine calculations one by one, starting with:
-
-### Step 1 — Revenue Growth / CAGR
-
-For Revenue Growth / CAGR we will decide:
-
-- exact definition
-- why it matters for multibagger discovery
-- annual vs CAGR usage
-- required data
-- source preference
-- fiscal-year validation
-- minimum valid history
-- handling of missing/zero values
-- pre-screen vs full-engine use
-- industry exceptions
-
-Only after agreeing on the metric definition should code be changed.
-
-## 13. Engineering Principles
-
-- Preserve existing working architecture where possible.
-- Improve incrementally; avoid unnecessary rewrites.
-- Keep deterministic Python calculations separate from LLM research.
-- Keep data acquisition separate from calculations.
-- Validate before calculating.
-- Never turn missing data into zero silently.
-- Never allow invalid data to generate confident investment conclusions.
-- Prefer evidence-backed explanations over LLM-only judgments.
-- Keep financial quality, governance, management execution, research, valuation, and final decision as distinct responsibilities.
-
-## 14. Definition of Done for the Financial Engine
-
-The Financial Engine is ready for production use when:
-
-- Financial history is validated and correctly ordered.
-- Required metrics have explicit definitions.
-- Missing/invalid data is handled safely.
-- Source provenance is retained.
-- Metrics are consistent between pre-screen and full analysis.
-- Industry-specific rules are respected.
-- Financial quality is deterministic and testable.
-- Known bogus-ratio cases are covered by tests.
-- The engine can support downstream governance, management execution, research, valuation, and decision stages without duplicating financial calculations.
+The system should provide the evidence and analysis needed to answer that question — not simply output a stock tip.
