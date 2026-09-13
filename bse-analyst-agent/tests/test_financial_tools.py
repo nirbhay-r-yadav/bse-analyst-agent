@@ -52,6 +52,49 @@ class FinancialToolsTests(unittest.TestCase):
         # ROCE = EBIT / capital employed = 300 / 710 * 100 = 42.25%.
         self.assertEqual(ratios["ROCE (%)"], 42.25)
 
+    def test_roce_trend_and_average(self):
+        ratios = calculate_fundamental_ratios(self.history)
+        roce_values = [
+            180 / (600 + 100 - 150) * 100,
+            205 / (680 + 90 - 170) * 100,
+            230 / (760 + 80 - 200) * 100,
+            260 / (850 + 70 - 240) * 100,
+            300 / (950 + 60 - 300) * 100,
+        ]
+        expected_average = sum(roce_values) / len(roce_values)
+        expected_yoy = roce_values[-1] - roce_values[-2]
+        self.assertEqual(ratios["Average ROCE (%)"], round(expected_average, 2))
+        self.assertEqual(ratios["ROCE YoY Change (pp)"], round(expected_yoy, 2))
+        self.assertEqual(ratios["ROCE Trend"], "UP")
+
+    def test_roce_trend_down(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=200, pat=120, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=150, pat=100, total_debt=100, total_equity=550, cash_equivalents=50),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertLess(ratios["ROCE YoY Change (pp)"], 0)
+        self.assertEqual(ratios["ROCE Trend"], "DOWN")
+
+    def test_roce_trend_flat(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=100, pat=70, total_debt=100, total_equity=400, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=110, pat=75, total_debt=100, total_equity=440, cash_equivalents=50),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertEqual(ratios["ROCE YoY Change (pp)"], 0.0)
+        self.assertEqual(ratios["ROCE Trend"], "FLAT")
+
+    def test_one_year_history_has_no_roce_yoy_change(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2026", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNotNone(ratios["ROCE (%)"])
+        self.assertIsNotNone(ratios["Average ROCE (%)"])
+        self.assertIsNone(ratios["ROCE YoY Change (pp)"])
+        self.assertEqual(ratios["ROCE Trend"], "FLAT")
+
     def test_roce_missing_ebit_is_unavailable(self):
         history = CompanyFinancialHistory(years=[
             AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
