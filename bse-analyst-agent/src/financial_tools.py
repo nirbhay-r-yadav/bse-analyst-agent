@@ -70,12 +70,16 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     roce_trend = "FLAT"
     if roce_yoy_change is not None:
         roce_trend = "UP" if roce_yoy_change > 0 else "DOWN" if roce_yoy_change < 0 else "FLAT"
-    roce_history = {
-        year.fiscal_year: round(value, 2)
+    roce_values = [
+        (year.fiscal_year, calculate_roce(year))
         for year in years
-        if (value := calculate_roce(year)) is not None
+    ]
+    valid_roce_values = [value for _, value in roce_values if value is not None]
+    roce_history = {
+        fiscal_year: round(value, 2)
+        for fiscal_year, value in roce_values
+        if value is not None
     }
-    valid_roce_values = list(roce_history.values())
     average_roce = sum(valid_roce_values) / len(valid_roce_values) if valid_roce_values else None
 
     capital_employed = None
@@ -109,12 +113,16 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
 
     # PAT margin is valid even when PAT is negative: PAT / positive revenue
     # correctly captures a loss-making year as a negative margin.
-    pat_margin_history = {
-        year.fiscal_year: round(year.pat / year.revenue * 100, 2)
+    margin_values = [
+        (year.fiscal_year, year.pat / year.revenue * 100)
         for year in years
         if year.revenue > 0
+    ]
+    margins = [value for _, value in margin_values]
+    pat_margin_history = {
+        fiscal_year: round(value, 2)
+        for fiscal_year, value in margin_values
     }
-    margins = list(pat_margin_history.values())
     latest_margin = margins[-1] if margins else None
     avg_margin = sum(margins) / len(margins) if margins else None
     margin_range = max(margins) - min(margins) if margins else None
