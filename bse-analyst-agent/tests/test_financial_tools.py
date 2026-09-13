@@ -224,6 +224,66 @@ class FinancialToolsTests(unittest.TestCase):
         self.assertIsNone(ratios["PAT Margin YoY Change (pp)"])
         self.assertEqual(ratios["PAT Margin Trend"], "FLAT")
 
+    def test_ten_year_pat_margin_and_roce_history(self):
+        history = CompanyFinancialHistory(years=[make_year(year) for year in range(2017, 2027)])
+        ratios = calculate_fundamental_ratios(history)
+
+        self.assertEqual(ratios["years_analyzed"], 10)
+        self.assertEqual(ratios["history_years_available"], 10)
+        self.assertEqual(len(ratios["PAT Margin History (%)"]), 10)
+        self.assertEqual(len(ratios["ROCE History (%)"]), 10)
+        self.assertEqual(list(ratios["PAT Margin History (%)"].keys())[0], "FY2017")
+        self.assertEqual(list(ratios["PAT Margin History (%)"].keys())[-1], "FY2026")
+        self.assertEqual(list(ratios["ROCE History (%)"].keys())[0], "FY2017")
+        self.assertEqual(list(ratios["ROCE History (%)"].keys())[-1], "FY2026")
+
+        expected_margins = [
+            make_year(year).pat / make_year(year).revenue * 100
+            for year in range(2017, 2027)
+        ]
+        expected_roce = [
+            make_year(year).ebit / (
+                make_year(year).total_equity
+                + make_year(year).total_debt
+                - make_year(year).cash_equivalents
+            ) * 100
+            for year in range(2017, 2027)
+        ]
+
+        self.assertEqual(
+            list(ratios["PAT Margin History (%)"].values()),
+            [round(value, 2) for value in expected_margins],
+        )
+        self.assertEqual(
+            list(ratios["ROCE History (%)"].values()),
+            [round(value, 2) for value in expected_roce],
+        )
+        self.assertEqual(ratios["Minimum PAT Margin (%)"], round(min(expected_margins), 2))
+        self.assertEqual(ratios["Maximum PAT Margin (%)"], round(max(expected_margins), 2))
+        self.assertEqual(ratios["PAT Margin Range (pp)"], round(max(expected_margins) - min(expected_margins), 2))
+        self.assertEqual(ratios["Minimum ROCE (%)"], round(min(expected_roce), 2))
+        self.assertEqual(ratios["Maximum ROCE (%)"], round(max(expected_roce), 2))
+        self.assertEqual(ratios["ROCE Range (pp)"], round(max(expected_roce) - min(expected_roce), 2))
+
+    def test_ten_year_pat_margin_and_roce_use_all_valid_years(self):
+        years = [make_year(year) for year in range(2017, 2027)]
+        years[3] = AnnualFinancials(
+            fiscal_year="FY2020",
+            revenue=years[3].revenue,
+            ebit=None,
+            pat=years[3].pat,
+            total_debt=years[3].total_debt,
+            total_equity=years[3].total_equity,
+            cash_equivalents=years[3].cash_equivalents,
+        )
+        history = CompanyFinancialHistory(years=years)
+        ratios = calculate_fundamental_ratios(history)
+
+        self.assertEqual(len(ratios["PAT Margin History (%)"]), 10)
+        self.assertEqual(len(ratios["ROCE History (%)"]), 9)
+        self.assertNotIn("FY2020", ratios["ROCE History (%)"])
+        self.assertIn("FY2020", ratios["PAT Margin History (%)"])
+
     def test_score_is_deterministic(self):
         ratios = calculate_fundamental_ratios(self.history)
         score = calculate_quality_score(ratios, governance_clean=True)
@@ -275,4 +335,3 @@ class FinancialToolsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
