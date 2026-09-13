@@ -1,22 +1,41 @@
 from typing import Dict, Any, List
-from pydantic import BaseModel, Field
+import re
+from pydantic import BaseModel, Field, model_validator
 
 
 class AnnualFinancials(BaseModel):
     fiscal_year: str = Field(description="Fiscal year label, e.g. FY2026")
     revenue: float = Field(description="Revenue from operations, INR Cr")
-    ebit: float = Field(description="Operating profit / EBIT, INR Cr")
+    ebit: float | None = Field(default=None, description="Operating profit / EBIT, INR Cr")
     pat: float = Field(description="Profit after tax attributable to shareholders, INR Cr")
-    total_debt: float = Field(description="Total debt including lease liabilities, INR Cr")
-    total_equity: float = Field(description="Shareholders' equity / net worth, INR Cr")
-    cash_equivalents: float = Field(description="Cash, cash equivalents and current investments, INR Cr")
-    cfo: float = Field(description="Cash flow from operating activities, INR Cr")
-    interest_expense: float = Field(description="Finance costs / interest expense, INR Cr")
-    capex: float = Field(default=0.0, description="Capital expenditure / purchase of PPE and intangibles, INR Cr; positive amount")
+    total_debt: float | None = Field(default=None, description="Total debt including lease liabilities, INR Cr")
+    total_equity: float | None = Field(default=None, description="Shareholders' equity / net worth, INR Cr")
+    cash_equivalents: float | None = Field(default=None, description="Cash, cash equivalents and current investments, INR Cr")
+    cfo: float | None = Field(default=None, description="Cash flow from operating activities, INR Cr")
+    interest_expense: float | None = Field(default=None, description="Finance costs / interest expense, INR Cr")
+    capex: float | None = Field(default=None, description="Capital expenditure / purchase of PPE and intangibles, INR Cr; positive amount")
+
+    @model_validator(mode="after")
+    def validate_data(self):
+        if not re.fullmatch(r"FY\d{4}", self.fiscal_year):
+            raise ValueError("fiscal_year must use the format FY20XX")
+        if self.revenue <= 0:
+            raise ValueError("revenue must be greater than zero")
+        return self
 
 
 class CompanyFinancialHistory(BaseModel):
-    years: List[AnnualFinancials] = Field(min_length=3, max_length=5, description="Oldest fiscal year first, latest fiscal year last")
+    years: List[AnnualFinancials] = Field(min_length=1, max_length=10, description="Fiscal years in chronological order, oldest first")
+
+    @model_validator(mode="after")
+    def validate_history(self):
+        fiscal_years = [year.fiscal_year for year in self.years]
+        if len(fiscal_years) != len(set(fiscal_years)):
+            raise ValueError("fiscal years must be unique")
+        numeric_years = [int(year[2:]) for year in fiscal_years]
+        if numeric_years != sorted(numeric_years):
+            raise ValueError("fiscal years must be in chronological order, oldest first")
+        return self
 
 
 CompanyFinancialInputs = AnnualFinancials
