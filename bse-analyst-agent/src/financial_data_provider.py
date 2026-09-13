@@ -62,11 +62,6 @@ class StructuredFinancialProvider:
         return None
 
     @staticmethod
-    def _is_audited_consolidated(row: dict[str, Any]) -> bool:
-        text = " ".join(str(v).lower() for v in row.values() if isinstance(v, (str, int, float)))
-        return "audited" in text and "consolidated" in text
-
-    @staticmethod
     def _nse_row_fiscal_year(row: dict[str, Any]) -> str | None:
         for key in ("financialYear", "toDate"):
             value = row.get(key)
@@ -76,19 +71,43 @@ class StructuredFinancialProvider:
                     return f"FY{match.group(1)}"
         return None
 
+    @staticmethod
+    def _nse_row_priority(row: dict[str, Any]) -> int:
+        """Rank annual NSE rows so one best filing is selected per fiscal year."""
+        score = 0
+        if str(row.get("period", "")).strip().lower() == "annual":
+            score += 100
+        if str(row.get("relatingTo", "")).strip().lower() == "annual":
+            score += 80
+        if str(row.get("cumulative", "")).strip().lower() == "cumulative":
+            score += 40
+        if str(row.get("audited", "")).strip().lower() == "audited":
+            score += 30
+        if str(row.get("consolidated", "")).strip().lower() == "consolidated":
+            score += 30
+        return score
+
     def _nse_xbrl_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
         rows = self._nse_annual_rows(symbol)
-        candidates: list[tuple[int, str, str | None]] = []
+        best_by_year: dict[str, tuple[int, str, str | None]] = {}
+        fallback: list[tuple[int, str, str | None]] = []
         for row in rows:
             url = self._xbrl_url(row)
             if not url:
                 continue
-            # Keep every XBRL row. Older NSE rows can contain both consolidated
-            # and standalone text in their metadata; strict exclusion can silently
-            # discard the historical annual reports we need.
-            priority = 1 if self._is_audited_consolidated(row) else 0
-            candidates.append((priority, url, self._nse_row_fiscal_year(row)))
-        candidates.sort(key=lambda item: (item[0], item[2] or ""), reverse=True)
+            fiscal_year = self._nse_row_fiscal_year(row)
+            candidate = (self._nse_row_priority(row), url, fiscal_year)
+            if fiscal_year:
+                current = best_by_year.get(fiscal_year)
+                if current is None or candidate[0] > current[0]:
+                    best_by_year[fiscal_year] = candidate
+            else:
+                fallback.append(candidate)
+
+        candidates = sorted(best_by_year.values(), key=lambda item: item[2] or "", reverse=True)
+        if len(candidates) < 10:
+            candidates.extend(sorted(fallback, key=lambda item: item[0], reverse=True)[: 10 - len(candidates)])
+
         records = []
         seen: set[str] = set()
         for _, url, fiscal_year in candidates[:12]:
