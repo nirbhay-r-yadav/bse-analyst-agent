@@ -10,7 +10,7 @@ history used by the deterministic financial engine.
 """
 
 from __future__ import annotations
-
+from datetime import datetime
 import re
 from typing import Any
 
@@ -18,7 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .financial_tools import AnnualFinancials, CompanyFinancialHistory
-
+import xml.etree.ElementTree as ET
 
 class FinancialDataError(RuntimeError):
     """Raised when structured financial data is unavailable or unreliable."""
@@ -147,7 +147,235 @@ class StructuredFinancialProvider:
     def _reliable_records(records: list[AnnualFinancials]) -> list[AnnualFinancials]:
         filtered = [r for r in records if re.match(r"^FY20\d{2}$", r.fiscal_year)]
         return filtered[-10:]
+        def _nse_xbrl_value(
+        self,
+        facts: dict[str, list[tuple[dict[str, Any], float]]],
+        names: tuple[str, ...],
+        context_type: str,
+        fiscal_year: str,
+    ) -> float | None:
+        """Return one NSE XBRL fact for the requested fiscal year."""
 
+        candidates = []
+
+        for name in names:
+            for context, value in facts.get(name, []):
+                if context.get("type") != context_type:
+                    continue
+                if context.get("fiscal_year") != fiscal_year:
+                    continue
+                if context.get("has_dimensions"):
+                    continue
+                candidates.append(value)
+
+            if candidates:
+                return candidates[0]
+
+        return None
+
+    def _parse_nse_xbrl(self, xml_content: bytes, symbol: str) -> AnnualFinancials:
+        """Parse one audited consolidated NSE XBRL annual filing."""
+
+        root = ET.fromstring(xml_content)
+
+        # Build context metadata first.
+        contexts: dict[str, dict[str, Any]] = {}
+
+        for context in root.iter():
+            if context.tag.split("}")[-1] != "context":
+                continue
+
+            context_id = context.attrib.get("id")
+            if not context_id:
+                continue
+
+            start_date = None
+            end_date = None
+            has_dimensions = False
+
+            for child in context.iter():
+                local = child.tag.split("}")[-1]
+
+                if local == "startDate":
+                    start_date = child.text
+
+                elif local == "endDate":
+                    end_date = child.text
+
+                elif local == "explicitMember":
+                    has_dimensions = True
+
+            if not end_date:
+                continue
+
+            fiscal_year = None
+            context_type = "instant"
+
+            if start_date:
+                context_type = "duration"
+
+                try:
+                    start = datetime.fromisoformat(start_date)
+                    end = datetime.fromisoformat(end_date)
+
+                    # Indian financial year: 1 Apr -> 31 Mar.
+                    if start.month == 4 and start.day == 1 and end.month == 3 and end.day == 31:
+                        fiscal_year = f"FY{end.year}"
+                except ValueError:
+                    pass
+
+            else:
+                try:
+                    end = datetime.fromisoformat(end_date)
+
+                    if end.month == 3 and end.day == 31:
+                        fiscal_year = f"FY{end.year}"
+                except ValueError:
+                    pass
+
+            if fiscal_year:
+                contexts[context_id] = {
+                    "type": context_type,
+                    "fiscal_year": fiscal_year,
+                    "has_dimensions": has_dimensions,
+                }
+
+        # Convert XBRL facts into:
+        # local_tag -> [(context_metadata, numeric_value), ...]
+        facts: dict[str, list[tuple[dict[str, Any], float]]] = {}
+
+        for element in root.iter():
+            context_ref = element.attrib.get("contextRef")
+
+            if not context_ref or context_ref not in contexts:
+                continue
+
+            text = (element.text or "").strip()
+            if not text:
+                continue
+
+            try:
+                value = float(text.replace(",", ""))
+            except ValueError:
+                continue
+
+            local_name = element.tag.split("}")[-1]
+
+            facts.setdefault(local_name, []).append(
+                (contexts[context_ref], value)
+            )
+
+        # This parser is intentionally single-year for now.
+        fiscal_years = {
+            context["fiscal_year"]
+            for context in contexts.values()
+            if context.get("fiscal_year")
+        }
+
+        if not fiscal_years:
+            raise FinancialDataError(
+                f"No annual fiscal-year context found in NSE XBRL for {symbol}"
+            )
+
+        fiscal_year = max(fiscal_years)
+
+        revenue = self._nse_xbrl_value(
+            facts,
+            ("RevenueFromOperations",),
+            "duration",
+            fiscal_year,
+        )
+
+        pat = self._nse_xbrl_value(
+            facts,
+            (
+                "ProfitOrLossAttributableToOwnersOfParent",
+                "ProfitLossForPeriod",
+            ),
+            "duration",
+            fiscal_year,
+        )
+
+        ebit = self._nse_xbrl_value(
+            facts,
+            (
+                "SegmentProfitLossBeforeTaxAndFinanceCosts",
+                "ProfitLossBeforeTaxAndFinanceCosts",
+            ),
+            "duration",
+            fiscal_year,
+        )
+
+        interest = self._nse_xbrl_value(
+            facts,
+            ("FinanceCosts",),
+            "duration",
+            fiscal_year,
+        )
+
+        equity = self._nse_xbrl_value(
+            facts,
+            ("Equity",),
+            "instant",
+            fiscal_year,
+        )
+
+        debt_current = self._nse_xbrl_value(
+            facts,
+            ("BorrowingsCurrent",),
+            "instant",
+            fiscal_year,
+        )
+
+        debt_noncurrent = self._nse_xbrl_value(
+            facts,
+            ("BorrowingsNoncurrent",),
+            "instant",
+            fiscal_year,
+        )
+
+        cash = self._nse_xbrl_value(
+            facts,
+            ("CashAndCashEquivalents",),
+            "instant",
+            fiscal_year,
+        )
+
+        cfo = self._nse_xbrl_value(
+            facts,
+            ("CashFlowsFromUsedInOperatingActivities",),
+            "duration",
+            fiscal_year,
+        )
+
+        capex = self._nse_xbrl_value(
+            facts,
+            ("PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",),
+            "duration",
+            fiscal_year,
+        )
+
+        if revenue is None or pat is None:
+            raise FinancialDataError(
+                f"Incomplete NSE XBRL financial data for {symbol} {fiscal_year}"
+            )
+
+        total_debt = None
+        if debt_current is not None and debt_noncurrent is not None:
+            total_debt = debt_current + debt_noncurrent
+
+        return AnnualFinancials(
+            fiscal_year=fiscal_year,
+            revenue=revenue / 10000000,
+            ebit=ebit / 10000000 if ebit is not None else None,
+            pat=pat / 10000000,
+            total_debt=total_debt / 10000000 if total_debt is not None else None,
+            total_equity=equity / 10000000 if equity is not None else None,
+            cash_equivalents=cash / 10000000 if cash is not None else None,
+            cfo=cfo / 10000000 if cfo is not None else None,
+            interest_expense=interest / 10000000 if interest is not None else None,
+            capex=capex / 10000000 if capex is not None else None,
+        )
     def _resolve_screener_symbol(self, symbol: str) -> str:
         """Resolve an NSE/BSE-style input to Screener's canonical symbol.
 
@@ -242,7 +470,7 @@ class StructuredFinancialProvider:
             if revenue is None or pat is None:
                 continue
             total_equity = self._sum_if_complete(equity_capital[idx], reserves[idx]) if equity_capital and reserves else None
-            cash = self._sum_if_complete(investments[idx], cash_bank[idx]) if investments and cash_bank else None
+            cash = cash_bank[idx] if cash_bank else None
             records.append(AnnualFinancials(
                 fiscal_year=fiscal_year,
                 revenue=float(revenue),
