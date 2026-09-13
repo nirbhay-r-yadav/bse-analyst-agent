@@ -42,12 +42,7 @@ class StructuredFinancialProvider:
     def _nse_annual_rows(self, symbol: str) -> list[dict[str, Any]]:
         self._warm_nse()
         try:
-            response = self.session.get(
-                self.NSE_RESULTS_URL,
-                params={"index": "equities", "period": "Annual", "symbol": symbol},
-                headers={"Referer": self.NSE_RESULTS_PAGE},
-                timeout=self.timeout,
-            )
+            response = self.session.get(self.NSE_RESULTS_URL, params={"index": "equities", "period": "Annual", "symbol": symbol}, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -240,7 +235,7 @@ class StructuredFinancialProvider:
             raise FinancialDataError(f"No annual fiscal-year context found in NSE XBRL for {symbol}")
         fiscal_year = fiscal_year_override or max(fiscal_years)
         revenue = self._nse_xbrl_value(facts, ("RevenueFromOperations",), "duration", fiscal_year)
-        pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
+        pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
         ebit = self._nse_xbrl_value(facts, ("SegmentProfitLossBeforeTaxAndFinanceCosts", "ProfitLossBeforeTaxAndFinanceCosts"), "duration", fiscal_year)
         interest = self._nse_xbrl_value(facts, ("FinanceCosts",), "duration", fiscal_year)
         equity = self._nse_xbrl_value(facts, ("Equity",), "instant", fiscal_year)
