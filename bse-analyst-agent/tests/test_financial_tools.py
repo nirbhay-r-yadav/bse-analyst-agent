@@ -79,7 +79,7 @@ class FinancialToolsTests(unittest.TestCase):
     def test_roce_trend_flat(self):
         history = CompanyFinancialHistory(years=[
             AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=100, pat=70, total_debt=100, total_equity=400, cash_equivalents=50),
-            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=110, pat=75, total_debt=100, total_equity=440, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=100, pat=75, total_debt=100, total_equity=400, cash_equivalents=50),
         ])
         ratios = calculate_fundamental_ratios(history)
         self.assertEqual(ratios["ROCE YoY Change (pp)"], 0.0)
@@ -275,3 +275,4 @@ class FinancialToolsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
