@@ -56,10 +56,26 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     latest = years[-1]
     prior = years[-2] if len(years) >= 2 else None
 
+    def calculate_roce(year: AnnualFinancials) -> float | None:
+        if year.total_equity is None or year.total_debt is None or year.cash_equivalents is None or year.ebit is None:
+            return None
+        capital_employed = year.total_equity + year.total_debt - year.cash_equivalents
+        if capital_employed <= 0:
+            return None
+        return year.ebit / capital_employed * 100
+
+    roce = calculate_roce(latest)
+    prior_roce = calculate_roce(prior) if prior else None
+    roce_yoy_change = roce - prior_roce if roce is not None and prior_roce is not None else None
+    roce_trend = "FLAT"
+    if roce_yoy_change is not None:
+        roce_trend = "UP" if roce_yoy_change > 0 else "DOWN" if roce_yoy_change < 0 else "FLAT"
+    valid_roce_values = [value for year in years if (value := calculate_roce(year)) is not None]
+    average_roce = sum(valid_roce_values) / len(valid_roce_values) if valid_roce_values else None
+
     capital_employed = None
     if latest.total_equity is not None and latest.total_debt is not None and latest.cash_equivalents is not None:
         capital_employed = latest.total_equity + latest.total_debt - latest.cash_equivalents
-    roce = latest.ebit / capital_employed * 100 if latest.ebit is not None and capital_employed is not None and capital_employed > 0 else None
     roe = latest.pat / latest.total_equity * 100 if latest.total_equity is not None and latest.total_equity > 0 else None
     net_debt = latest.total_debt - latest.cash_equivalents if latest.total_debt is not None and latest.cash_equivalents is not None else None
     de_ratio = latest.total_debt / latest.total_equity if latest.total_debt is not None and latest.total_equity not in (None, 0) else None
@@ -121,6 +137,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "history_years_available": len(years),
         "latest_fiscal_year": latest.fiscal_year,
         "ROCE (%)": round(roce, 2) if roce is not None else None,
+        "Average ROCE (%)": round(average_roce, 2) if average_roce is not None else None,
+        "ROCE YoY Change (pp)": round(roce_yoy_change, 2) if roce_yoy_change is not None else None,
+        "ROCE Trend": roce_trend,
         "ROE (%)": round(roe, 2) if roe is not None else None,
         "Revenue YoY Growth (%)": round(rev_growth_yoy, 2) if rev_growth_yoy is not None else None,
         "PAT YoY Growth (%)": round(pat_growth_yoy, 2) if pat_growth_yoy is not None else None,
