@@ -82,10 +82,39 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     }
     average_roce = sum(valid_roce_values) / len(valid_roce_values) if valid_roce_values else None
 
+    def calculate_roe(index: int) -> float | None:
+        if index <= 0:
+            return None
+        current = years[index]
+        previous = years[index - 1]
+        if current.total_equity is None or previous.total_equity is None:
+            return None
+        average_equity = (previous.total_equity + current.total_equity) / 2
+        if average_equity <= 0:
+            return None
+        return current.pat / average_equity * 100
+
+    roe = calculate_roe(len(years) - 1)
+    prior_roe = calculate_roe(len(years) - 2) if len(years) >= 3 else None
+    roe_yoy_change = roe - prior_roe if roe is not None and prior_roe is not None else None
+    roe_trend = "FLAT"
+    if roe_yoy_change is not None:
+        roe_trend = "UP" if roe_yoy_change > 0 else "DOWN" if roe_yoy_change < 0 else "FLAT"
+    roe_values = [
+        (year.fiscal_year, calculate_roe(index))
+        for index, year in enumerate(years)
+    ]
+    valid_roe_values = [value for _, value in roe_values if value is not None]
+    roe_history = {
+        fiscal_year: round(value, 2)
+        for fiscal_year, value in roe_values
+        if value is not None
+    }
+    average_roe = sum(valid_roe_values) / len(valid_roe_values) if valid_roe_values else None
+
     capital_employed = None
     if latest.total_equity is not None and latest.total_debt is not None and latest.cash_equivalents is not None:
         capital_employed = latest.total_equity + latest.total_debt - latest.cash_equivalents
-    roe = latest.pat / latest.total_equity * 100 if latest.total_equity is not None and latest.total_equity > 0 else None
     net_debt = latest.total_debt - latest.cash_equivalents if latest.total_debt is not None and latest.cash_equivalents is not None else None
     de_ratio = latest.total_debt / latest.total_equity if latest.total_debt is not None and latest.total_equity not in (None, 0) else None
     interest_coverage = latest.ebit / latest.interest_expense if latest.ebit is not None and latest.interest_expense is not None and latest.interest_expense > 0 else None
@@ -163,6 +192,13 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "ROCE YoY Change (pp)": round(roce_yoy_change, 2) if roce_yoy_change is not None else None,
         "ROCE Trend": roce_trend,
         "ROE (%)": round(roe, 2) if roe is not None else None,
+        "Average ROE (%)": round(average_roe, 2) if average_roe is not None else None,
+        "ROE History (%)": roe_history,
+        "Minimum ROE (%)": round(min(valid_roe_values), 2) if valid_roe_values else None,
+        "Maximum ROE (%)": round(max(valid_roe_values), 2) if valid_roe_values else None,
+        "ROE Range (pp)": round(max(valid_roe_values) - min(valid_roe_values), 2) if valid_roe_values else None,
+        "ROE YoY Change (pp)": round(roe_yoy_change, 2) if roe_yoy_change is not None else None,
+        "ROE Trend": roe_trend,
         "Revenue YoY Growth (%)": round(rev_growth_yoy, 2) if rev_growth_yoy is not None else None,
         "PAT YoY Growth (%)": round(pat_growth_yoy, 2) if pat_growth_yoy is not None else None,
         "Revenue CAGR (%)": round(revenue_cagr, 2) if revenue_cagr is not None else None,
