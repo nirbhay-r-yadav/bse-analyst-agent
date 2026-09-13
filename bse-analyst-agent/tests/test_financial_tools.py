@@ -46,6 +46,75 @@ class FinancialToolsTests(unittest.TestCase):
         self.assertIsNone(ratios["Revenue CAGR 10Y (%)"])
         self.assertEqual(ratios["Positive CFO Years"], "5/5")
 
+    def test_roce_exact_calculation(self):
+        ratios = calculate_fundamental_ratios(self.history)
+        # FY2026 capital employed = equity + debt - cash = 950 + 60 - 300 = 710.
+        # ROCE = EBIT / capital employed = 300 / 710 * 100 = 42.25%.
+        self.assertEqual(ratios["ROCE (%)"], 42.25)
+
+    def test_roce_missing_ebit_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=None, pat=110, total_debt=90, total_equity=550, cash_equivalents=60),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_missing_equity_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=160, pat=110, total_debt=90, total_equity=None, cash_equivalents=60),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_missing_debt_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=160, pat=110, total_debt=None, total_equity=550, cash_equivalents=60),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_missing_cash_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=160, pat=110, total_debt=90, total_equity=550, cash_equivalents=None),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_zero_capital_employed_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2026", revenue=1000, ebit=150, pat=100, total_debt=100, total_equity=50, cash_equivalents=150),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_negative_capital_employed_is_unavailable(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2026", revenue=1000, ebit=150, pat=100, total_debt=50, total_equity=50, cash_equivalents=150),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNone(ratios["ROCE (%)"])
+
+    def test_roce_can_be_negative_when_ebit_is_negative(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2026", revenue=1000, ebit=-50, pat=-20, total_debt=100, total_equity=500, cash_equivalents=50),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertEqual(ratios["ROCE (%)"], -9.09)
+
+    def test_roce_uses_latest_year(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2024", revenue=1000, ebit=100, pat=70, total_debt=100, total_equity=400, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2025", revenue=1100, ebit=200, pat=120, total_debt=100, total_equity=500, cash_equivalents=50),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1200, ebit=180, pat=110, total_debt=100, total_equity=600, cash_equivalents=50),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        # Latest-year ROCE = 180 / (600 + 100 - 50) * 100 = 27.69%.
+        self.assertEqual(ratios["ROCE (%)"], 27.69)
+
     def test_pat_cagr_matches_compounded_growth(self):
         ratios = calculate_fundamental_ratios(self.history)
         # PAT grows from 120 to 210 across four year-to-year intervals.
