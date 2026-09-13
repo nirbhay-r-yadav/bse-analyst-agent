@@ -73,7 +73,6 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _nse_row_priority(row: dict[str, Any]) -> int:
-        """Rank annual NSE rows so one best filing is selected per fiscal year."""
         score = 0
         if str(row.get("period", "")).strip().lower() == "annual":
             score += 100
@@ -189,13 +188,17 @@ class StructuredFinancialProvider:
                     instant_date = child.text
                 elif local in {"explicitmember", "typedmember"}:
                     has_dimensions = True
-            end = self._xbrl_date(end_date)
+
             start = self._xbrl_date(start_date)
+            end = self._xbrl_date(end_date)
             instant = self._xbrl_date(instant_date)
-            fiscal_year = None
-            context_type = "instant"
-            annual_context = False
             context_lower = context_id.lower()
+            legacy_annual_context = context_lower.startswith("four") and context_lower.endswith("d")
+
+            fiscal_year = fiscal_year_override if fiscal_year_override and legacy_annual_context else None
+            context_type = "duration" if legacy_annual_context else "instant"
+            annual_context = legacy_annual_context
+
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days if end is not None else 0
@@ -205,14 +208,15 @@ class StructuredFinancialProvider:
                 fiscal_year = f"FY{end.year}"
             elif instant is not None:
                 fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
-            if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
+
+            if legacy_annual_context and fiscal_year_override:
                 fiscal_year = fiscal_year_override
                 context_type = "duration"
                 annual_context = True
-            if fiscal_year is None and context_lower == "fourd" and end is not None:
-                fiscal_year = f"FY{end.year}"
+            elif legacy_annual_context and fiscal_year is not None:
                 context_type = "duration"
                 annual_context = True
+
             if fiscal_year:
                 contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions, "annual_context": annual_context}
 
@@ -227,10 +231,11 @@ class StructuredFinancialProvider:
                 end = self._xbrl_date(dates.get("enddate"))
                 start = self._xbrl_date(dates.get("startdate"))
                 instant = self._xbrl_date(dates.get("instant"))
-                fiscal_year = None
-                context_type = "instant"
-                annual_context = False
                 context_lower = context_id.lower()
+                legacy_annual_context = context_lower.startswith("four") and context_lower.endswith("d")
+                fiscal_year = fiscal_year_override if fiscal_year_override and legacy_annual_context else None
+                context_type = "duration" if legacy_annual_context else "instant"
+                annual_context = legacy_annual_context
                 if start is not None:
                     context_type = "duration"
                     days = (end - start).days if end is not None else 0
@@ -240,12 +245,11 @@ class StructuredFinancialProvider:
                     fiscal_year = f"FY{end.year}"
                 elif instant is not None:
                     fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
-                if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
+                if legacy_annual_context and fiscal_year_override:
                     fiscal_year = fiscal_year_override
                     context_type = "duration"
                     annual_context = True
-                if fiscal_year is None and context_lower == "fourd" and end is not None:
-                    fiscal_year = f"FY{end.year}"
+                elif legacy_annual_context and fiscal_year is not None:
                     context_type = "duration"
                     annual_context = True
                 if fiscal_year:
@@ -297,19 +301,19 @@ class StructuredFinancialProvider:
 
     def _nse_history(self, symbol: str) -> CompanyFinancialHistory:
         records: list[AnnualFinancials] = []
-        errors: list[str] = []
         for _, xml_content, fiscal_year in self._nse_xbrl_records(symbol):
             try:
                 records.append(self._parse_nse_xbrl(xml_content, symbol, fiscal_year_override=fiscal_year))
-            except (ET.ParseError, FinancialDataError) as exc:
-                errors.append(str(exc))
-        records = self._reliable_records(records)
-        if not records:
-            detail = f"; parser errors: {' | '.join(errors[:3])}" if errors else ""
-            raise FinancialDataError(f"No reliable NSE XBRL annual financial history for {symbol}{detail}")
-        if any(row.revenue <= 0 or row.pat == 0 for row in records):
-            raise FinancialDataError(f"NSE XBRL financial data quality check failed for {symbol}")
-        return CompanyFinancialHistory(years=records)
+            except (ET.ParseError, FinancialDataError, ValueError):
+                continue
+        reliable = self._reliable_records(records)
+        if not reliable:
+            raise FinancialDataError(f"Financial data quality check failed for {symbol}")
+        return CompanyFinancialHistory(symbol=symbol, years=reliable)
 
     def get_history(self, symbol: str) -> CompanyFinancialHistory:
-        return self._nse_history(self._symbol(symbol))
+        symbol = self._symbol(symbol)
+        try:
+            return self._nse_history(symbol)
+        except FinancialDataError:
+            raise
