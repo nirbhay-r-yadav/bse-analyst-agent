@@ -115,6 +115,10 @@ class StructuredFinancialProvider:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
                     return value
+        for name in names:
+            for context, value in facts.get(name, []):
+                if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year:
+                    return value
         return None
 
     @staticmethod
@@ -129,52 +133,84 @@ class StructuredFinancialProvider:
         except ValueError:
             return None
 
+    @staticmethod
+    def _local_name(tag: Any) -> str:
+        text = str(tag)
+        return text.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
     def _parse_nse_xbrl(self, xml_content: bytes, symbol: str) -> AnnualFinancials:
         root = ET.fromstring(xml_content)
         contexts: dict[str, dict[str, Any]] = {}
 
-        for context in root.iter():
-            if context.tag.split("}")[-1].lower() != "context":
+        for element in root.iter():
+            if self._local_name(element.tag) != "context":
                 continue
-            context_id = context.attrib.get("id")
+            context_id = element.attrib.get("id")
             if not context_id:
                 continue
-
             start_date = None
             end_date = None
             has_dimensions = False
-            for child in context.iter():
-                local = child.tag.split("}")[-1].lower()
+            for child in element.iter():
+                local = self._local_name(child.tag)
                 if local == "startdate":
                     start_date = child.text
                 elif local == "enddate":
                     end_date = child.text
-                elif local == "explicitmember":
+                elif local in {"explicitmember", "typedmember"}:
                     has_dimensions = True
-
             end = self._xbrl_date(end_date)
             start = self._xbrl_date(start_date)
             if end is None:
                 continue
-
             fiscal_year = None
             context_type = "instant"
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days
-                if end.month == 3 and end.day == 31 and (
-                    (start.month == 4 and start.day == 1) or 300 <= days <= 370
-                ):
+                if end.month == 3 and end.day == 31 and 300 <= days <= 370:
                     fiscal_year = f"FY{end.year}"
             elif end.month == 3 and end.day == 31:
                 fiscal_year = f"FY{end.year}"
-
             if fiscal_year:
-                contexts[context_id] = {
-                    "type": context_type,
-                    "fiscal_year": fiscal_year,
-                    "has_dimensions": has_dimensions,
-                }
+                contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions}
+
+        # NSE has used multiple namespace/tag layouts over time. If the normal
+        # ElementTree walk does not recover contexts, use the raw XML as a
+        # second parser. This keeps the accounting source the same while making
+        # the context extraction tolerant of filing-format variations.
+        if not contexts:
+            raw = xml_content.decode("utf-8", errors="ignore")
+            context_pattern = re.compile(
+                r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?P=tag)>",
+                re.IGNORECASE | re.DOTALL,
+            )
+            date_pattern = re.compile(
+                r"<(?:[A-Za-z0-9_.-]+:)?(?P<name>startDate|endDate)\b[^>]*>\s*(?P<value>[^<]+)\s*</(?:[A-Za-z0-9_.-]+:)?(?P=name)>",
+                re.IGNORECASE,
+            )
+            for match in context_pattern.finditer(raw):
+                body = match.group("body")
+                dates = {m.group("name").lower(): m.group("value") for m in date_pattern.finditer(body)}
+                end = self._xbrl_date(dates.get("enddate"))
+                start = self._xbrl_date(dates.get("startdate"))
+                if end is None:
+                    continue
+                fiscal_year = None
+                context_type = "instant"
+                if start is not None:
+                    context_type = "duration"
+                    days = (end - start).days
+                    if end.month == 3 and end.day == 31 and 300 <= days <= 370:
+                        fiscal_year = f"FY{end.year}"
+                elif end.month == 3 and end.day == 31:
+                    fiscal_year = f"FY{end.year}"
+                if fiscal_year:
+                    contexts[match.group("id")] = {
+                        "type": context_type,
+                        "fiscal_year": fiscal_year,
+                        "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE)),
+                    }
 
         facts: dict[str, list[tuple[dict[str, Any], float]]] = {}
         for element in root.iter():
@@ -188,7 +224,7 @@ class StructuredFinancialProvider:
                 value = float(text.replace(",", ""))
             except ValueError:
                 continue
-            facts.setdefault(element.tag.split("}")[-1], []).append((contexts[context_ref], value))
+            facts.setdefault(self._local_name(element.tag), []).append((contexts[context_ref], value))
 
         fiscal_years = {c["fiscal_year"] for c in contexts.values()}
         if not fiscal_years:
