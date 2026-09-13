@@ -194,10 +194,6 @@ class StructuredFinancialProvider:
         for template in self.SCREENER_URLS:
             try:
                 history = self._parse_screener(symbol, template.format(symbol=symbol))
-                if input_symbol and symbol.upper() != input_symbol.upper():
-                    history.source_notes += (
-                        f" Screener symbol resolved from {input_symbol} to {symbol}."
-                    )
                 return history
             except (requests.RequestException, FinancialDataError) as exc:
                 last_error = exc
@@ -274,16 +270,11 @@ class StructuredFinancialProvider:
 
         return CompanyFinancialHistory(
             years=records,
-            source="Screener.in public structured tables",
-            data_quality="MEDIUM",
-            source_notes="Structured annual P&L, balance-sheet and cash-flow tables; no PDF financial-table extraction used.",
-        )
+                   )
 
     def get_history(self, symbol: str) -> CompanyFinancialHistory:
         clean_symbol = self._symbol(symbol)
         nse_available = self._nse_annual_probe(clean_symbol)
         screener_symbol = self._resolve_screener_symbol(clean_symbol)
         history = self._screener_history(screener_symbol, input_symbol=clean_symbol)
-        if nse_available:
-            history.source_notes += " NSE annual financial-result filings were also detected and can be used for future cross-checking."
         return history

@@ -17,6 +17,7 @@ load_dotenv()
 from src.nse_downloader import NSEDownloader
 from src.doc_parser import FinancialDocParser
 from src.financial_tools import calculate_fundamental_ratios, calculate_quality_score, calculate_pe_valuation, determine_final_recommendation
+from src.financial_data_provider import FinancialDataError, StructuredFinancialProvider
 from src.agent import AnalysisOrchestrator
 from src.nse_universe import NSEUniverse
 from src.smallcap_scanner import SmallMicrocapConfig, classify_market_cap
@@ -58,6 +59,9 @@ def run_corporate_risk_only(symbol: str, report_years: int = 10, live_filings: b
         try:
             parser = FinancialDocParser(item["path"])
             sections = parser.extract_critical_sections()
+            print("\n========== EXTRACTED FINANCIAL STATEMENTS ==========")
+            print(sections.get("financial_statements", ""))
+            print("========== END FINANCIAL STATEMENTS ==========\n")
             print(f"[*] Forensic governance audit: {fy}")
             forensic = ai.audit_forensics(sections.get("auditor_report", ""), sections.get("notes", ""))
             audits.append({
@@ -371,21 +375,19 @@ def run_financial_analysis_only(
     print(f"FINANCIAL ANALYSIS | {symbol}")
     print("=" * 72)
 
-    print("[*] Downloading annual report...")
-    pdf_path = NSEDownloader().download_report(symbol)
+    print("[*] Collecting 10-year structured financial history...")
 
-    if not pdf_path:
-        print(f"[!] Could not download annual report for {symbol}.")
+    try:
+        history = StructuredFinancialProvider().get_history(symbol)
+    except FinancialDataError as exc:
+        print(f"[!] Structured financial data unavailable for {symbol}: {exc}")
+        print("    Financial analysis stopped to prevent false conclusions.")
         return
 
-    parser = FinancialDocParser(pdf_path)
-    sections = parser.extract_critical_sections()
-
-    orchestrator = AnalysisOrchestrator()
-
-    print("[*] Extracting financial history...")
-    history = orchestrator.extract_metrics_payload(
-        sections["financial_statements"]
+    print(f"[+] Financial history loaded: {len(history.years)} years")
+    print(
+        f"[+] Fiscal years: "
+        f"{history.years[0].fiscal_year} → {history.years[-1].fiscal_year}"
     )
 
     print("[*] Calculating fundamental ratios...")
@@ -1330,3 +1332,4 @@ if __name__ == "__main__":
 
     else:
         cli.print_help()
+
