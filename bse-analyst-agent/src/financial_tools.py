@@ -86,10 +86,17 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     revenue_cagr_5y = period_cagr("revenue", 5)
     revenue_cagr_10y = period_cagr("revenue", 10)
 
+    # PAT margin is valid even when PAT is negative: PAT / positive revenue
+    # correctly captures a loss-making year as a negative margin.
     margins = [y.pat / y.revenue * 100 for y in years if y.revenue > 0]
     latest_margin = margins[-1] if margins else None
     avg_margin = sum(margins) / len(margins) if margins else None
-    margin_stability = max(margins) - min(margins) if margins else None
+    margin_range = max(margins) - min(margins) if margins else None
+    pat_margin_yoy_change = latest_margin - margins[-2] if len(margins) >= 2 else None
+    pat_margin_trend = "FLAT"
+    if pat_margin_yoy_change is not None:
+        pat_margin_trend = "UP" if pat_margin_yoy_change > 0 else "DOWN" if pat_margin_yoy_change < 0 else "FLAT"
+
     positive_cfo_years = sum(1 for y in years if y.cfo is not None and y.cfo > 0)
     conversion = [y.cfo / y.pat for y in years if y.cfo is not None and y.pat > 0]
     avg_cash_conversion = sum(conversion) / len(conversion) if conversion else None
@@ -124,7 +131,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "Revenue CAGR 10Y (%)": round(revenue_cagr_10y, 2) if revenue_cagr_10y is not None else None,
         "Latest PAT Margin (%)": round(latest_margin, 2) if latest_margin is not None else None,
         "Average PAT Margin (%)": round(avg_margin, 2) if avg_margin is not None else None,
-        "PAT Margin Range (pp)": round(margin_stability, 2) if margin_stability is not None else None,
+        "PAT Margin Range (pp)": round(margin_range, 2) if margin_range is not None else None,
+        "PAT Margin YoY Change (pp)": round(pat_margin_yoy_change, 2) if pat_margin_yoy_change is not None else None,
+        "PAT Margin Trend": pat_margin_trend,
         "Debt to Equity": round(de_ratio, 2) if de_ratio is not None else None,
         "Net Debt (Cr)": round(net_debt, 2) if net_debt is not None else None,
         "Interest Coverage Ratio": round(interest_coverage, 2) if interest_coverage is not None else None,
