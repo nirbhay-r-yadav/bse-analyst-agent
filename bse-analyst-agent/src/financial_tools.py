@@ -2,6 +2,8 @@ from typing import Dict, Any, List
 import re
 from pydantic import BaseModel, Field, model_validator
 
+from .history_policy import MIN_YEARS_CAGR, MIN_YEARS_CONSISTENCY, MIN_YEARS_TREND, valid_history
+
 
 class AnnualFinancials(BaseModel):
     fiscal_year: str = Field(description="Fiscal year label, e.g. FY2026")
@@ -25,7 +27,7 @@ class AnnualFinancials(BaseModel):
 
 
 class CompanyFinancialHistory(BaseModel):
-    years: List[AnnualFinancials] = Field(min_length=1, max_length=10, description="Fiscal years in chronological order, oldest first")
+    years: List[AnnualFinancials] = Field(min_length=1, max_length=10, description="Up to 10 available fiscal years in chronological order, oldest first; fewer years are valid")
 
     @model_validator(mode="after")
     def validate_history(self):
@@ -70,16 +72,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     roce_trend = "FLAT"
     if roce_yoy_change is not None:
         roce_trend = "UP" if roce_yoy_change > 0 else "DOWN" if roce_yoy_change < 0 else "FLAT"
-    roce_values = [
-        (year.fiscal_year, calculate_roce(year))
-        for year in years
-    ]
+    roce_values = [(year.fiscal_year, calculate_roce(year)) for year in years]
     valid_roce_values = [value for _, value in roce_values if value is not None]
-    roce_history = {
-        fiscal_year: round(value, 2)
-        for fiscal_year, value in roce_values
-        if value is not None
-    }
+    roce_history = {fiscal_year: round(value, 2) for fiscal_year, value in roce_values if value is not None}
     average_roce = sum(valid_roce_values) / len(valid_roce_values) if valid_roce_values else None
 
     def calculate_roe(index: int) -> float | None:
@@ -100,21 +95,11 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     roe_trend = "FLAT"
     if roe_yoy_change is not None:
         roe_trend = "UP" if roe_yoy_change > 0 else "DOWN" if roe_yoy_change < 0 else "FLAT"
-    roe_values = [
-        (year.fiscal_year, calculate_roe(index))
-        for index, year in enumerate(years)
-    ]
+    roe_values = [(year.fiscal_year, calculate_roe(index)) for index, year in enumerate(years)]
     valid_roe_values = [value for _, value in roe_values if value is not None]
-    roe_history = {
-        fiscal_year: round(value, 2)
-        for fiscal_year, value in roe_values
-        if value is not None
-    }
+    roe_history = {fiscal_year: round(value, 2) for fiscal_year, value in roe_values if value is not None}
     average_roe = sum(valid_roe_values) / len(valid_roe_values) if valid_roe_values else None
 
-    capital_employed = None
-    if latest.total_equity is not None and latest.total_debt is not None and latest.cash_equivalents is not None:
-        capital_employed = latest.total_equity + latest.total_debt - latest.cash_equivalents
     net_debt = latest.total_debt - latest.cash_equivalents if latest.total_debt is not None and latest.cash_equivalents is not None else None
     de_ratio = latest.total_debt / latest.total_equity if latest.total_debt is not None and latest.total_equity not in (None, 0) else None
     interest_coverage = latest.ebit / latest.interest_expense if latest.ebit is not None and latest.interest_expense is not None and latest.interest_expense > 0 else None
@@ -122,36 +107,28 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     rev_growth_yoy = _growth(latest.revenue, prior.revenue) if prior else None
     pat_growth_yoy = _growth(latest.pat, prior.pat) if prior else None
 
-    first = years[0]
-    revenue_cagr = _cagr(latest.revenue, first.revenue, len(years) - 1)
-    pat_cagr = _cagr(latest.pat, first.pat, len(years) - 1)
+    valid_revenue = valid_history([year.revenue for year in years])
+    valid_pat = valid_history([year.pat for year in years])
+    revenue_cagr = _cagr(valid_revenue[-1], valid_revenue[0], len(valid_revenue) - 1) if len(valid_revenue) >= MIN_YEARS_CAGR else None
+    pat_cagr = _cagr(valid_pat[-1], valid_pat[0], len(valid_pat) - 1) if len(valid_pat) >= MIN_YEARS_CAGR else None
 
     def period_cagr(field: str, period: int) -> float | None:
-        # "3Y" / "5Y" / "10Y" means the span covered by that many annual observations
-        # in this engine. Therefore a 3-year history has a 3Y CAGR, a 10-year history
-        # has a 10Y CAGR, and the earliest observation is period observations back.
-        if len(years) < period:
+        if period <= 1:
             return None
-        old = getattr(years[-period], field)
-        new = getattr(latest, field)
-        return _cagr(new, old, period - 1) if new is not None and old is not None else None
+        values = valid_history([getattr(year, field) for year in years])
+        if len(values) < period:
+            return None
+        old = values[-period]
+        new = values[-1]
+        return _cagr(new, old, period - 1)
 
     revenue_cagr_3y = period_cagr("revenue", 3)
     revenue_cagr_5y = period_cagr("revenue", 5)
     revenue_cagr_10y = period_cagr("revenue", 10)
 
-    # PAT margin is valid even when PAT is negative: PAT / positive revenue
-    # correctly captures a loss-making year as a negative margin.
-    margin_values = [
-        (year.fiscal_year, year.pat / year.revenue * 100)
-        for year in years
-        if year.revenue > 0
-    ]
+    margin_values = [(year.fiscal_year, year.pat / year.revenue * 100) for year in years if year.revenue > 0]
     margins = [value for _, value in margin_values]
-    pat_margin_history = {
-        fiscal_year: round(value, 2)
-        for fiscal_year, value in margin_values
-    }
+    pat_margin_history = {fiscal_year: round(value, 2) for fiscal_year, value in margin_values}
     latest_margin = margins[-1] if margins else None
     avg_margin = sum(margins) / len(margins) if margins else None
     margin_range = max(margins) - min(margins) if margins else None
@@ -160,7 +137,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     if pat_margin_yoy_change is not None:
         pat_margin_trend = "UP" if pat_margin_yoy_change > 0 else "DOWN" if pat_margin_yoy_change < 0 else "FLAT"
 
-    positive_cfo_years = sum(1 for y in years if y.cfo is not None and y.cfo > 0)
+    cfo_values = [y.cfo for y in years if y.cfo is not None]
+    positive_cfo_years = sum(1 for value in cfo_values if value > 0)
+    cfo_positive_ratio = positive_cfo_years / len(cfo_values) if cfo_values else None
     conversion = [y.cfo / y.pat for y in years if y.cfo is not None and y.pat > 0]
     avg_cash_conversion = sum(conversion) / len(conversion) if conversion else None
 
@@ -176,7 +155,8 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "clean_debt": (de_ratio is not None and de_ratio <= 1.0) or (net_debt is not None and net_debt <= 0),
         "cash_conversion_sound": cfo_to_pat is not None and cfo_to_pat >= 0.70,
         "healthy_coverage": interest_coverage is not None and interest_coverage >= 3.5,
-        "five_year_cfo_positive": positive_cfo_years >= max(3, len(years) - 1),
+        "cfo_history_sufficient": len(cfo_values) >= MIN_YEARS_CONSISTENCY,
+        "cfo_positive_consistency": cfo_positive_ratio is not None and cfo_positive_ratio >= 0.70,
     }
 
     return {
@@ -218,8 +198,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "Net Debt (Cr)": round(net_debt, 2) if net_debt is not None else None,
         "Interest Coverage Ratio": round(interest_coverage, 2) if interest_coverage is not None else None,
         "CFO / PAT Quality Ratio": round(cfo_to_pat, 2) if cfo_to_pat is not None else None,
-        "Average CFO / PAT (5Y)": round(avg_cash_conversion, 2) if avg_cash_conversion is not None else None,
-        "Positive CFO Years": f"{positive_cfo_years}/{len(years)}",
+        "Average CFO / PAT (Available History)": round(avg_cash_conversion, 2) if avg_cash_conversion is not None else None,
+        "Positive CFO Years": f"{positive_cfo_years}/{len(cfo_values)}",
+        "CFO Positive Ratio (%)": round(cfo_positive_ratio * 100, 2) if cfo_positive_ratio is not None else None,
         "trends": {"revenue": revenue_trend, "pat": pat_trend},
         "hurdles_passed": hurdles,
     }
@@ -233,7 +214,7 @@ def calculate_quality_score(ratios: Dict[str, Any], governance_clean: bool = Tru
     net_debt = ratios["Net Debt (Cr)"]
     de_ratio = ratios["Debt to Equity"]
     cfo_quality = ratios["CFO / PAT Quality Ratio"]
-    avg_conversion = ratios["Average CFO / PAT (5Y)"]
+    avg_conversion = ratios["Average CFO / PAT (Available History)"]
     components = {
         "capital_efficiency": 20 if roce is not None and roce >= 20 else 15 if roce is not None and roce >= 15 else 8 if roce is not None and roce >= 10 else 0,
         "growth": 20 if revenue_cagr is not None and pat_cagr is not None and revenue_cagr >= 15 and pat_cagr >= 15 else 15 if revenue_cagr is not None and pat_cagr is not None and revenue_cagr >= 10 and pat_cagr >= 10 else 8 if revenue_cagr is not None and revenue_cagr >= 5 else 0,
@@ -253,7 +234,7 @@ def calculate_pe_valuation(current_price: float, shares_outstanding_cr: float, l
         return {"available": False, "reason": "PAT CAGR is unavailable; valuation is withheld rather than treating missing growth as zero."}
     eps = latest_pat_cr / shares_outstanding_cr
     fair_value = eps * target_pe
-    buy_below = fair_value * (1 - margin_of_safety_pct / 100)
+    buy_below = fair_value * (1 - margin_of_safety_pct / 100.0)
     market_cap_cr = current_price * shares_outstanding_cr
     implied_pe = current_price / eps if eps else 0.0
     return {
@@ -273,8 +254,10 @@ def calculate_pe_valuation(current_price: float, shares_outstanding_cr: float, l
 
 def determine_final_recommendation(quality: Dict[str, Any], ratios: Dict[str, Any], forensic_clean: bool, valuation: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Deterministic final decision; avoids allowing an LLM to override hard risk rules."""
-    if not forensic_clean or ratios["Positive CFO Years"].startswith("0/"):
-        return {"verdict": "AVOID", "reason": "Governance/forensic clearance failed or operating cash flow is persistently weak."}
+    cfo_history_sufficient = ratios.get("hurdles_passed", {}).get("cfo_history_sufficient", False)
+    cfo_positive_consistency = ratios.get("hurdles_passed", {}).get("cfo_positive_consistency", False)
+    if not forensic_clean or (cfo_history_sufficient and not cfo_positive_consistency):
+        return {"verdict": "AVOID", "reason": "Governance/forensic clearance failed or available operating cash flow history is persistently weak."}
 
     score = quality["score_100"]
     if score < 60:
