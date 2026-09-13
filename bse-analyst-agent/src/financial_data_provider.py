@@ -427,8 +427,46 @@ class StructuredFinancialProvider:
         fiscal_year = fiscal_year_override or max(fiscal_years)
         revenue = self._nse_xbrl_value(facts, ("RevenueFromOperations",), "duration", fiscal_year)
         pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
-        ebit = self._nse_xbrl_value(facts, ("SegmentProfitLossBeforeTaxAndFinanceCosts", "ProfitLossBeforeTaxAndFinanceCosts"), "duration", fiscal_year)
         interest = self._nse_xbrl_value(facts, ("FinanceCosts",), "duration", fiscal_year)
+
+        # Prefer direct EBIT/PBIT when available.
+        ebit = self._nse_xbrl_value(
+            facts,
+            (
+                "SegmentProfitLossBeforeTaxAndFinanceCosts",
+                "ProfitLossBeforeTaxAndFinanceCosts",
+                "ProfitBeforeTaxAndFinanceCosts",
+            ),
+            "duration",
+            fiscal_year,
+        )
+
+        # Fallback: derive operating EBIT while excluding
+        # exceptional items and non-operating Other Income.
+        if ebit is None:
+            profit_before_exceptional = self._nse_xbrl_value(
+                facts,
+                ("ProfitBeforeExceptionalItemsAndTax",),
+                "duration",
+                fiscal_year,
+            )
+            other_income = self._nse_xbrl_value(
+                facts,
+                ("OtherIncome",),
+                "duration",
+                fiscal_year,
+            )
+
+            if (
+                profit_before_exceptional is not None
+                and interest is not None
+                and other_income is not None
+            ):
+                ebit = (
+                    profit_before_exceptional
+                    + interest
+                    - other_income
+                )
         equity = self._nse_xbrl_value(facts, ("Equity",), "instant", fiscal_year)
         debt_current = self._nse_xbrl_value(facts, ("BorrowingsCurrent",), "instant", fiscal_year)
         debt_noncurrent = self._nse_xbrl_value(facts, ("BorrowingsNoncurrent",), "instant", fiscal_year)
