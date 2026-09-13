@@ -80,7 +80,8 @@ class FinancialToolsTests(unittest.TestCase):
             AnnualFinancials(fiscal_year="FY2026", revenue=1200, ebit=220, pat=132),
         ])
         ratios = calculate_fundamental_ratios(history)
-        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], 1.0)
+        # FY2025 margin = 9.09%; FY2026 margin = 11.00%; expansion = 1.91pp.
+        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], 1.91)
         self.assertEqual(ratios["PAT Margin Trend"], "UP")
 
     def test_pat_margin_contraction_is_detected(self):
@@ -89,7 +90,8 @@ class FinancialToolsTests(unittest.TestCase):
             AnnualFinancials(fiscal_year="FY2025", revenue=1100, ebit=180, pat=110),
         ])
         ratios = calculate_fundamental_ratios(history)
-        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], -1.91)
+        # FY2024 margin = 12.00%; FY2025 margin = 10.00%; contraction = -2.00pp.
+        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], -2.0)
         self.assertEqual(ratios["PAT Margin Trend"], "DOWN")
 
     def test_negative_pat_produces_negative_margin(self):
