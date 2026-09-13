@@ -64,7 +64,7 @@ class StructuredFinancialProvider:
     @staticmethod
     def _is_audited_consolidated(row: dict[str, Any]) -> bool:
         text = " ".join(str(v).lower() for v in row.values() if isinstance(v, (str, int, float)))
-        return "audited" in text and "consolidated" in text and "standalone" not in text and "non-consolidated" not in text
+        return "audited" in text and "consolidated" in text
 
     @staticmethod
     def _nse_row_fiscal_year(row: dict[str, Any]) -> str | None:
@@ -78,16 +78,20 @@ class StructuredFinancialProvider:
 
     def _nse_xbrl_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
         rows = self._nse_annual_rows(symbol)
-        candidates = []
+        candidates: list[tuple[int, str, str | None]] = []
         for row in rows:
             url = self._xbrl_url(row)
-            if url and self._is_audited_consolidated(row):
-                candidates.append((url, self._nse_row_fiscal_year(row)))
-        if not candidates:
-            candidates = [(url, self._nse_row_fiscal_year(row)) for row in rows if (url := self._xbrl_url(row))]
+            if not url:
+                continue
+            # Keep every XBRL row. Older NSE rows can contain both consolidated
+            # and standalone text in their metadata; strict exclusion can silently
+            # discard the historical annual reports we need.
+            priority = 1 if self._is_audited_consolidated(row) else 0
+            candidates.append((priority, url, self._nse_row_fiscal_year(row)))
+        candidates.sort(key=lambda item: (item[0], item[2] or ""), reverse=True)
         records = []
         seen: set[str] = set()
-        for url, fiscal_year in candidates[:12]:
+        for _, url, fiscal_year in candidates[:12]:
             if url in seen:
                 continue
             seen.add(url)
@@ -118,9 +122,6 @@ class StructuredFinancialProvider:
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
                     matches.append((context, value))
         if matches:
-            # Legacy NSE XBRL uses FourD-style contexts for annual values while
-            # their embedded dates may describe only the final quarter. Prefer
-            # the explicitly annual context before falling back to duration.
             annual = [item for item in matches if item[0].get("annual_context")]
             if annual:
                 return annual[0][1]
