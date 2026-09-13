@@ -161,28 +161,34 @@ class StructuredFinancialProvider:
                     has_dimensions = True
             end = self._xbrl_date(end_date)
             start = self._xbrl_date(start_date)
-            if end is None:
-                continue
             fiscal_year = None
             context_type = "instant"
             if start is not None:
                 context_type = "duration"
-                days = (end - start).days
-                if end.month == 3 and end.day == 31 and 300 <= days <= 370:
+                days = (end - start).days if end is not None else 0
+                if end is not None and end.month == 3 and end.day == 31 and 300 <= days <= 370:
                     fiscal_year = f"FY{end.year}"
-            elif end.month == 3 and end.day == 31:
+            elif end is not None and end.month == 3 and end.day == 31:
                 fiscal_year = f"FY{end.year}"
+
+            # NSE commonly identifies the base annual duration context as
+            # "FourD". Prefer that explicit convention when date parsing is
+            # incomplete, and keep it as an ordinary duration context so all
+            # downstream fact selection remains deterministic.
+            if fiscal_year is None and context_id.lower() == "fourd" and end is not None:
+                fiscal_year = f"FY{end.year}"
+                context_type = "duration"
             if fiscal_year:
                 contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions}
 
         # NSE has used multiple namespace/tag layouts over time. If the normal
-        # ElementTree walk does not recover contexts, use the raw XML as a
-        # second parser. This keeps the accounting source the same while making
-        # the context extraction tolerant of filing-format variations.
-        if not contexts:
+        # ElementTree walk does not recover usable annual contexts, use the raw
+        # XML as a second parser. This also handles cases where ElementTree
+        # recovers contexts but cannot derive their fiscal-year dates.
+        if not any(c.get("fiscal_year") for c in contexts.values()):
             raw = xml_content.decode("utf-8", errors="ignore")
             context_pattern = re.compile(
-                r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?P=tag)>",
+                r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?:[A-Za-z0-9_.-]+:)?context\s*>",
                 re.IGNORECASE | re.DOTALL,
             )
             date_pattern = re.compile(
@@ -190,23 +196,25 @@ class StructuredFinancialProvider:
                 re.IGNORECASE,
             )
             for match in context_pattern.finditer(raw):
+                context_id = match.group("id")
                 body = match.group("body")
                 dates = {m.group("name").lower(): m.group("value") for m in date_pattern.finditer(body)}
                 end = self._xbrl_date(dates.get("enddate"))
                 start = self._xbrl_date(dates.get("startdate"))
-                if end is None:
-                    continue
                 fiscal_year = None
                 context_type = "instant"
                 if start is not None:
                     context_type = "duration"
-                    days = (end - start).days
-                    if end.month == 3 and end.day == 31 and 300 <= days <= 370:
+                    days = (end - start).days if end is not None else 0
+                    if end is not None and end.month == 3 and end.day == 31 and 300 <= days <= 370:
                         fiscal_year = f"FY{end.year}"
-                elif end.month == 3 and end.day == 31:
+                elif end is not None and end.month == 3 and end.day == 31:
                     fiscal_year = f"FY{end.year}"
+                if fiscal_year is None and context_id.lower() == "fourd" and end is not None:
+                    fiscal_year = f"FY{end.year}"
+                    context_type = "duration"
                 if fiscal_year:
-                    contexts[match.group("id")] = {
+                    contexts[context_id] = {
                         "type": context_type,
                         "fiscal_year": fiscal_year,
                         "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE)),
