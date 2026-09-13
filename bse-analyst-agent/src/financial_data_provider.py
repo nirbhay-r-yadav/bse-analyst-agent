@@ -111,12 +111,21 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _nse_xbrl_value(facts: dict[str, list[tuple[dict[str, Any], float]]], names: tuple[str, ...], context_type: str, fiscal_year: str) -> float | None:
-        names = tuple(name.lower() for name in names)
-        for name in names:
+        normalized_names = tuple(name.lower() for name in names)
+        matches: list[tuple[dict[str, Any], float]] = []
+        for name in normalized_names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
-                    return value
-        for name in names:
+                    matches.append((context, value))
+        if matches:
+            # Legacy NSE XBRL uses FourD-style contexts for annual values while
+            # their embedded dates may describe only the final quarter. Prefer
+            # the explicitly annual context before falling back to duration.
+            annual = [item for item in matches if item[0].get("annual_context")]
+            if annual:
+                return annual[0][1]
+            return matches[0][1]
+        for name in normalized_names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year:
                     return value
@@ -165,6 +174,7 @@ class StructuredFinancialProvider:
             instant = self._xbrl_date(instant_date)
             fiscal_year = None
             context_type = "instant"
+            annual_context = False
             context_lower = context_id.lower()
             if start is not None:
                 context_type = "duration"
@@ -178,11 +188,13 @@ class StructuredFinancialProvider:
             if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
                 fiscal_year = fiscal_year_override
                 context_type = "duration"
+                annual_context = True
             if fiscal_year is None and context_lower == "fourd" and end is not None:
                 fiscal_year = f"FY{end.year}"
                 context_type = "duration"
+                annual_context = True
             if fiscal_year:
-                contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions}
+                contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions, "annual_context": annual_context}
 
         if not any(c.get("fiscal_year") for c in contexts.values()):
             raw = xml_content.decode("utf-8", errors="ignore")
@@ -197,6 +209,7 @@ class StructuredFinancialProvider:
                 instant = self._xbrl_date(dates.get("instant"))
                 fiscal_year = None
                 context_type = "instant"
+                annual_context = False
                 context_lower = context_id.lower()
                 if start is not None:
                     context_type = "duration"
@@ -210,11 +223,13 @@ class StructuredFinancialProvider:
                 if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
                     fiscal_year = fiscal_year_override
                     context_type = "duration"
+                    annual_context = True
                 if fiscal_year is None and context_lower == "fourd" and end is not None:
                     fiscal_year = f"FY{end.year}"
                     context_type = "duration"
+                    annual_context = True
                 if fiscal_year:
-                    contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE))}
+                    contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE)), "annual_context": annual_context}
 
         facts: dict[str, list[tuple[dict[str, Any], float]]] = {}
         for element in root.iter():
