@@ -258,7 +258,12 @@ class StructuredFinancialProvider:
         facts: dict[str, list[tuple[dict[str, Any], float]]] = {}
         for element in root.iter():
             context_ref = element.attrib.get("contextRef")
-            if not context_ref or context_ref not in contexts:
+            if not context_ref:
+                continue
+            context = contexts.get(context_ref)
+            if context is None and fiscal_year_override and context_ref.lower() == "fourd":
+                context = {"type": "duration", "fiscal_year": fiscal_year_override, "has_dimensions": False, "annual_context": True}
+            if context is None:
                 continue
             text = (element.text or "").strip()
             if not text:
@@ -267,9 +272,11 @@ class StructuredFinancialProvider:
                 value = float(text.replace(",", ""))
             except ValueError:
                 continue
-            facts.setdefault(self._local_name(element.tag), []).append((contexts[context_ref], value))
+            facts.setdefault(self._local_name(element.tag), []).append((context, value))
 
         fiscal_years = {c["fiscal_year"] for c in contexts.values()}
+        if fiscal_year_override:
+            fiscal_years.add(fiscal_year_override)
         if not fiscal_years:
             raise FinancialDataError(f"No annual fiscal-year context found in NSE XBRL for {symbol}")
         fiscal_year = fiscal_year_override or max(fiscal_years)
