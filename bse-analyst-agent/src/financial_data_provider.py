@@ -64,40 +64,12 @@ class StructuredFinancialProvider:
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             raise FinancialDataError(f"NSE annual financial-results request failed for {symbol}: {exc}") from exc
-
         rows = payload.get("data", []) if isinstance(payload, dict) else payload
-        if not isinstance(rows, list):
-            return []
-        return [row for row in rows if isinstance(row, dict)]
-
-    @staticmethod
-    def _text(value: Any) -> str:
-        return str(value or "").strip().lower()
-
-    @classmethod
-    def _row_value(cls, row: dict[str, Any], *names: str) -> Any:
-        wanted = {name.lower() for name in names}
-        for key, value in row.items():
-            if key.lower() in wanted:
-                return value
-        return None
-
-    @classmethod
-    def _contains_value(cls, row: dict[str, Any], *values: str) -> bool:
-        wanted = {value.lower() for value in values}
-        return any(cls._text(v) in wanted for v in row.values() if isinstance(v, (str, int, float)))
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
     @classmethod
     def _xbrl_url(cls, row: dict[str, Any]) -> str | None:
-        """Find the XBRL URL even if NSE changes the response field name."""
-        preferred = (
-            "xbrl",
-            "xbrlFileName",
-            "xbrlFile",
-            "xbrl_file_name",
-            "xbrlFileLink",
-            "xbrl_file_link",
-        )
+        preferred = ("xbrl", "xbrlFileName", "xbrlFile", "xbrl_file_name", "xbrlFileLink", "xbrl_file_link")
         for key in preferred:
             value = row.get(key)
             if isinstance(value, str) and value.startswith("http") and value.lower().endswith((".xml", ".xbrl")):
@@ -107,46 +79,32 @@ class StructuredFinancialProvider:
                 return value
         return None
 
-    @classmethod
-    def _is_audited_consolidated(cls, row: dict[str, Any]) -> bool:
-        values = [cls._text(v) for v in row.values() if isinstance(v, (str, int, float))]
-        text = " ".join(values)
-        audited = "audited" in text
-        consolidated = "consolidated" in text
-        standalone = "standalone" in text or "non-consolidated" in text
-        return audited and consolidated and not standalone
+    @staticmethod
+    def _is_audited_consolidated(row: dict[str, Any]) -> bool:
+        text = " ".join(str(v).lower() for v in row.values() if isinstance(v, (str, int, float)))
+        return "audited" in text and "consolidated" in text and "standalone" not in text and "non-consolidated" not in text
 
     def _nse_xbrl_rows(self, symbol: str) -> list[tuple[str, bytes]]:
         rows = self._nse_annual_rows(symbol)
-        candidates: list[tuple[str, str]] = []
+        candidates: list[str] = []
         for row in rows:
             url = self._xbrl_url(row)
-            if not url:
-                continue
-            if self._is_audited_consolidated(row):
-                candidates.append((url, self._row_value(row, "period", "fromDate", "toDate") or ""))
-
+            if url and self._is_audited_consolidated(row):
+                candidates.append(url)
         if not candidates:
-            # Some NSE payload versions omit the audited/consolidated labels.
-            for row in rows:
-                url = self._xbrl_url(row)
-                if url:
-                    candidates.append((url, self._row_value(row, "period", "fromDate", "toDate") or ""))
-
-        unique: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for item in candidates:
-            if item[0] not in seen:
-                seen.add(item[0])
-                unique.append(item)
+            candidates = [url for row in rows if (url := self._xbrl_url(row))]
 
         records: list[tuple[str, bytes]] = []
-        for url, label in unique[:12]:
+        seen: set[str] = set()
+        for url in candidates[:12]:
+            if url in seen:
+                continue
+            seen.add(url)
             try:
                 response = self.session.get(url, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
                 response.raise_for_status()
                 if response.content:
-                    records.append((label, response.content))
+                    records.append((url, response.content))
             except requests.RequestException:
                 continue
         return records
@@ -158,63 +116,66 @@ class StructuredFinancialProvider:
         return sorted(unique.values(), key=lambda r: int(r.fiscal_year[2:]))[-10:]
 
     @staticmethod
-    def _nse_xbrl_value(
-        facts: dict[str, list[tuple[dict[str, Any], float]]],
-        names: tuple[str, ...],
-        context_type: str,
-        fiscal_year: str,
-    ) -> float | None:
+    def _nse_xbrl_value(facts: dict[str, list[tuple[dict[str, Any], float]]], names: tuple[str, ...], context_type: str, fiscal_year: str) -> float | None:
         for name in names:
-            candidates = []
             for context, value in facts.get(name, []):
-                if context.get("type") != context_type:
-                    continue
-                if context.get("fiscal_year") != fiscal_year:
-                    continue
-                if context.get("has_dimensions"):
-                    continue
-                candidates.append(value)
-            if candidates:
-                return candidates[0]
+                if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
+                    return value
         return None
+
+    @staticmethod
+    def _xbrl_date(value: Any) -> datetime | None:
+        """Parse XBRL dates defensively across NSE date representations."""
+        if not value:
+            return None
+        text = str(value).strip()
+        match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+        if not match:
+            return None
+        try:
+            return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return None
 
     def _parse_nse_xbrl(self, xml_content: bytes, symbol: str) -> AnnualFinancials:
         root = ET.fromstring(xml_content)
         contexts: dict[str, dict[str, Any]] = {}
 
         for context in root.iter():
-            if context.tag.split("}")[-1] != "context":
+            if context.tag.split("}")[-1].lower() != "context":
                 continue
             context_id = context.attrib.get("id")
             if not context_id:
                 continue
+
             start_date = None
             end_date = None
             has_dimensions = False
             for child in context.iter():
-                local = child.tag.split("}")[-1]
-                if local == "startDate":
+                local = child.tag.split("}")[-1].lower()
+                if local == "startdate":
                     start_date = child.text
-                elif local == "endDate":
+                elif local == "enddate":
                     end_date = child.text
-                elif local == "explicitMember":
+                elif local == "explicitmember"::
                     has_dimensions = True
-            if not end_date:
+
+            end = self._xbrl_date(end_date)
+            start = self._xbrl_date(start_date)
+            if end is None:
                 continue
 
             fiscal_year = None
             context_type = "instant"
-            try:
-                end = datetime.fromisoformat(end_date)
-                if start_date:
-                    context_type = "duration"
-                    start = datetime.fromisoformat(start_date)
-                    if start.month == 4 and start.day == 1 and end.month == 3 and end.day == 31:
-                        fiscal_year = f"FY{end.year}"
-                elif end.month == 3 and end.day == 31:
+            if start is not None:
+                context_type = "duration"
+                days = (end - start).days
+                # Indian FY is normally 1 Apr -> 31 Mar. Allow small source-format
+                # variations while rejecting quarterly/half-year contexts.
+                if end.month == 3 and end.day == 31 and (start.month == 4 and start.day == 1 or 300 <= days <= 370):
                     fiscal_year = f"FY{end.year}"
-            except ValueError:
-                continue
+            elif end.month == 3 and end.day == 31:
+                fiscal_year = f"FY{end.year}"
 
             if fiscal_year:
                 contexts[context_id] = {
@@ -235,44 +196,28 @@ class StructuredFinancialProvider:
                 value = float(text.replace(",", ""))
             except ValueError:
                 continue
-            local_name = element.tag.split("}")[-1]
-            facts.setdefault(local_name, []).append((contexts[context_ref], value))
+            facts.setdefault(element.tag.split("}")[-1], []).append((contexts[context_ref], value))
 
-        fiscal_years = {c["fiscal_year"] for c in contexts.values() if c.get("fiscal_year")}
+        fiscal_years = {c["fiscal_year"] for c in contexts.values()}
         if not fiscal_years:
             raise FinancialDataError(f"No annual fiscal-year context found in NSE XBRL for {symbol}")
         fiscal_year = max(fiscal_years)
 
         revenue = self._nse_xbrl_value(facts, ("RevenueFromOperations",), "duration", fiscal_year)
-        pat = self._nse_xbrl_value(
-            facts,
-            ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"),
-            "duration",
-            fiscal_year,
-        )
-        ebit = self._nse_xbrl_value(
-            facts,
-            ("SegmentProfitLossBeforeTaxAndFinanceCosts", "ProfitLossBeforeTaxAndFinanceCosts"),
-            "duration",
-            fiscal_year,
-        )
+        pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
+        ebit = self._nse_xbrl_value(facts, ("SegmentProfitLossBeforeTaxAndFinanceCosts", "ProfitLossBeforeTaxAndFinanceCosts"), "duration", fiscal_year)
         interest = self._nse_xbrl_value(facts, ("FinanceCosts",), "duration", fiscal_year)
         equity = self._nse_xbrl_value(facts, ("Equity",), "instant", fiscal_year)
         debt_current = self._nse_xbrl_value(facts, ("BorrowingsCurrent",), "instant", fiscal_year)
         debt_noncurrent = self._nse_xbrl_value(facts, ("BorrowingsNoncurrent",), "instant", fiscal_year)
         cash = self._nse_xbrl_value(facts, ("CashAndCashEquivalents",), "instant", fiscal_year)
         cfo = self._nse_xbrl_value(facts, ("CashFlowsFromUsedInOperatingActivities",), "duration", fiscal_year)
-        capex = self._nse_xbrl_value(
-            facts,
-            ("PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",),
-            "duration",
-            fiscal_year,
-        )
+        capex = self._nse_xbrl_value(facts, ("PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",), "duration", fiscal_year)
 
         if revenue is None or pat is None:
             raise FinancialDataError(f"Incomplete NSE XBRL financial data for {symbol} {fiscal_year}")
-
         total_debt = debt_current + debt_noncurrent if debt_current is not None and debt_noncurrent is not None else None
+
         return AnnualFinancials(
             fiscal_year=fiscal_year,
             revenue=revenue / 10000000,
@@ -287,41 +232,20 @@ class StructuredFinancialProvider:
         )
 
     def _nse_history(self, symbol: str) -> CompanyFinancialHistory:
-        downloaded = self._nse_xbrl_rows(symbol)
         records: list[AnnualFinancials] = []
         errors: list[str] = []
-        for _, xml_content in downloaded:
+        for _, xml_content in self._nse_xbrl_rows(symbol):
             try:
                 records.append(self._parse_nse_xbrl(xml_content, symbol))
             except (ET.ParseError, FinancialDataError) as exc:
                 errors.append(str(exc))
-
         records = self._reliable_records(records)
         if not records:
             detail = f"; parser errors: {' | '.join(errors[:3])}" if errors else ""
             raise FinancialDataError(f"No reliable NSE XBRL annual financial history for {symbol}{detail}")
-
-        if sum(1 for r in records if r.revenue <= 0 or r.pat == 0) > 0:
+        if any(row.revenue <= 0 or row.pat == 0 for row in records):
             raise FinancialDataError(f"NSE XBRL financial data quality check failed for {symbol}")
         return CompanyFinancialHistory(years=records)
 
-    # Legacy Screener helpers retained for compatibility with older callers.
-    @staticmethod
-    def _number(value: Any) -> float | None:
-        if value is None:
-            return None
-        text = str(value).strip().replace("₹", "").replace(",", "")
-        if text in {"", "-", "—", "NA", "N/A"}:
-            return None
-        negative = text.startswith("(") and text.endswith(")")
-        text = text.strip("()")
-        text = re.sub(r"[^0-9.+-]", "", text)
-        try:
-            number = float(text)
-        except ValueError:
-            return None
-        return -number if negative else number
-
     def get_history(self, symbol: str) -> CompanyFinancialHistory:
-        clean_symbol = self._symbol(symbol)
-        return self._nse_history(clean_symbol)
+        return self._nse_history(self._symbol(symbol))
