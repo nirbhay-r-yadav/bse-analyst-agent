@@ -1222,36 +1222,7 @@ if __name__ == "__main__":
                         )
 
                     elif deep_choice == "2":
-                        print()
-                        price_input = input(
-                            "Current share price [press Enter to skip valuation]: "
-                        ).strip()
-
-                        shares_input = input(
-                            "Shares outstanding (Cr) [press Enter to skip valuation]: "
-                        ).strip()
-
-                        try:
-                            price = float(price_input) if price_input else None
-                            shares_cr = float(shares_input) if shares_input else None
-                        except ValueError:
-                            print("[!] Invalid price or shares value.")
-                            continue
-
-                        if (price is None) != (shares_cr is None):
-                            print(
-                                "[!] Please provide both price and shares outstanding, "
-                                "or leave both blank."
-                            )
-                            continue
-
-                        run_financial_analysis_only(
-                            symbol,
-                            price=price,
-                            shares_cr=shares_cr,
-                            target_pe=25.0,
-                            mos=20.0,
-                        )
+                        run_financial_analysis_only(symbol)
 
                     elif deep_choice == "3":
                         run_investment_decision_only(symbol)
@@ -1359,4 +1330,3 @@ if __name__ == "__main__":
 
     else:
         cli.print_help()
-
