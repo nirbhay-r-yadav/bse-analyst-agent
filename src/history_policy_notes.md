@@ -1,0 +1,1 @@
+Shared policy: use maximum valid history available, never require ten years. CAGR requires 2 valid observations; trend and consistency require 3. Missing observations are skipped and never converted to zero.
