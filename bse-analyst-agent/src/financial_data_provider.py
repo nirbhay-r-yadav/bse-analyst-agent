@@ -49,12 +49,7 @@ class StructuredFinancialProvider:
     def _nse_annual_rows(self, symbol: str) -> list[dict[str, Any]]:
         self._warm_nse()
         try:
-            response = self.session.get(
-                self.NSE_RESULTS_URL,
-                params={"index": "equities", "period": "Annual", "symbol": symbol},
-                headers={"Referer": self.NSE_RESULTS_PAGE},
-                timeout=self.timeout,
-            )
+            response = self.session.get(self.NSE_RESULTS_URL, params={"index": "equities", "period": "Annual", "symbol": symbol}, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -87,7 +82,6 @@ class StructuredFinancialProvider:
                 candidates.append(url)
         if not candidates:
             candidates = [url for row in rows if (url := self._xbrl_url(row))]
-
         records: list[tuple[str, bytes]] = []
         seen: set[str] = set()
         for url in candidates[:12]:
@@ -111,11 +105,15 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _nse_xbrl_value(facts: dict[str, list[tuple[dict[str, Any], float]]], names: tuple[str, ...], context_type: str, fiscal_year: str) -> float | None:
-        for name in names:
+        # _local_name() normalizes fact keys to lowercase, so normalize the
+        # requested names as well. This was the reason valid NSE facts such as
+        # RevenueFromOperations were being collected but never matched.
+        normalized_names = tuple(name.lower() for name in names)
+        for name in normalized_names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
                     return value
-        for name in names:
+        for name in normalized_names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year:
                     return value
@@ -141,15 +139,13 @@ class StructuredFinancialProvider:
     def _parse_nse_xbrl(self, xml_content: bytes, symbol: str) -> AnnualFinancials:
         root = ET.fromstring(xml_content)
         contexts: dict[str, dict[str, Any]] = {}
-
         for element in root.iter():
             if self._local_name(element.tag) != "context":
                 continue
             context_id = element.attrib.get("id")
             if not context_id:
                 continue
-            start_date = None
-            end_date = None
+            start_date = end_date = None
             has_dimensions = False
             for child in element.iter():
                 local = self._local_name(child.tag)
@@ -170,31 +166,16 @@ class StructuredFinancialProvider:
                     fiscal_year = f"FY{end.year}"
             elif end is not None and end.month == 3 and end.day == 31:
                 fiscal_year = f"FY{end.year}"
-
-            # NSE commonly identifies the base annual duration context as
-            # "FourD". Prefer that explicit convention when date parsing is
-            # incomplete, and keep it as an ordinary duration context so all
-            # downstream fact selection remains deterministic.
             if fiscal_year is None and context_id.lower() == "fourd" and end is not None:
                 fiscal_year = f"FY{end.year}"
                 context_type = "duration"
             if fiscal_year:
                 contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions}
 
-        # NSE has used multiple namespace/tag layouts over time. If the normal
-        # ElementTree walk does not recover usable annual contexts, use the raw
-        # XML as a second parser. This also handles cases where ElementTree
-        # recovers contexts but cannot derive their fiscal-year dates.
         if not any(c.get("fiscal_year") for c in contexts.values()):
             raw = xml_content.decode("utf-8", errors="ignore")
-            context_pattern = re.compile(
-                r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?:[A-Za-z0-9_.-]+:)?context\s*>",
-                re.IGNORECASE | re.DOTALL,
-            )
-            date_pattern = re.compile(
-                r"<(?:[A-Za-z0-9_.-]+:)?(?P<name>startDate|endDate)\b[^>]*>\s*(?P<value>[^<]+)\s*</(?:[A-Za-z0-9_.-]+:)?(?P=name)>",
-                re.IGNORECASE,
-            )
+            context_pattern = re.compile(r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?:[A-Za-z0-9_.-]+:)?context\s*>", re.IGNORECASE | re.DOTALL)
+            date_pattern = re.compile(r"<(?:[A-Za-z0-9_.-]+:)?(?P<name>startDate|endDate)\b[^>]*>\s*(?P<value>[^<]+)\s*</(?:[A-Za-z0-9_.-]+:)?(?P=name)>", re.IGNORECASE)
             for match in context_pattern.finditer(raw):
                 context_id = match.group("id")
                 body = match.group("body")
@@ -214,11 +195,7 @@ class StructuredFinancialProvider:
                     fiscal_year = f"FY{end.year}"
                     context_type = "duration"
                 if fiscal_year:
-                    contexts[context_id] = {
-                        "type": context_type,
-                        "fiscal_year": fiscal_year,
-                        "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE)),
-                    }
+                    contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": bool(re.search(r"explicitMember|typedMember", body, re.IGNORECASE))}
 
         facts: dict[str, list[tuple[dict[str, Any], float]]] = {}
         for element in root.iter():
