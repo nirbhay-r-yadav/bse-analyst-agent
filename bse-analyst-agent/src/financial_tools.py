@@ -41,73 +41,112 @@ class CompanyFinancialHistory(BaseModel):
 CompanyFinancialInputs = AnnualFinancials
 
 
-def _growth(new: float, old: float) -> float:
-    return ((new - old) / old * 100.0) if old else 0.0
+def _growth(new: float, old: float) -> float | None:
+    return ((new - old) / old * 100.0) if old else None
+
+
+def _cagr(new: float, old: float, periods: int) -> float | None:
+    if periods <= 0 or old <= 0 or new <= 0:
+        return None
+    return ((new / old) ** (1 / periods) - 1) * 100.0
 
 
 def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any]:
     years = data.years
-    latest, prior = years[-1], years[-2]
+    latest = years[-1]
+    prior = years[-2] if len(years) >= 2 else None
 
-    capital_employed = latest.total_equity + latest.total_debt - latest.cash_equivalents
-    roce = latest.ebit / capital_employed * 100 if capital_employed > 0 else 0.0
-    roe = latest.pat / latest.total_equity * 100 if latest.total_equity > 0 else 0.0
-    net_debt = latest.total_debt - latest.cash_equivalents
-    de_ratio = latest.total_debt / latest.total_equity if latest.total_equity else 0.0
-    interest_coverage = latest.ebit / latest.interest_expense if latest.interest_expense > 0 else 999.0
-    cfo_to_pat = latest.cfo / latest.pat if latest.pat > 0 else 0.0
-    rev_growth_yoy = _growth(latest.revenue, prior.revenue)
-    pat_growth_yoy = _growth(latest.pat, prior.pat)
+    capital_employed = None
+    if latest.total_equity is not None and latest.total_debt is not None and latest.cash_equivalents is not None:
+        capital_employed = latest.total_equity + latest.total_debt - latest.cash_equivalents
+    roce = latest.ebit / capital_employed * 100 if latest.ebit is not None and capital_employed is not None and capital_employed > 0 else None
+    roe = latest.pat / latest.total_equity * 100 if latest.total_equity is not None and latest.total_equity > 0 else None
+    net_debt = latest.total_debt - latest.cash_equivalents if latest.total_debt is not None and latest.cash_equivalents is not None else None
+    de_ratio = latest.total_debt / latest.total_equity if latest.total_debt is not None and latest.total_equity not in (None, 0) else None
+    interest_coverage = latest.ebit / latest.interest_expense if latest.ebit is not None and latest.interest_expense is not None and latest.interest_expense > 0 else None
+    cfo_to_pat = latest.cfo / latest.pat if latest.cfo is not None and latest.pat > 0 else None
+    rev_growth_yoy = _growth(latest.revenue, prior.revenue) if prior else None
+    pat_growth_yoy = _growth(latest.pat, prior.pat) if prior else None
 
-    first, n = years[0], len(years) - 1
-    revenue_cagr = ((latest.revenue / first.revenue) ** (1 / n) - 1) * 100 if first.revenue > 0 and latest.revenue > 0 else 0.0
-    pat_cagr = ((latest.pat / first.pat) ** (1 / n) - 1) * 100 if first.pat > 0 and latest.pat > 0 else 0.0
+    first = years[0]
+    revenue_cagr = _cagr(latest.revenue, first.revenue, len(years) - 1)
+    pat_cagr = _cagr(latest.pat, first.pat, len(years) - 1)
+
+    def period_cagr(field: str, period: int) -> float | None:
+        if len(years) <= period:
+            return None
+        old = getattr(years[-(period + 1)], field)
+        new = getattr(latest, field)
+        return _cagr(new, old, period) if new is not None and old is not None else None
+
+    revenue_cagr_3y = period_cagr("revenue", 3)
+    revenue_cagr_5y = period_cagr("revenue", 5)
+    revenue_cagr_10y = period_cagr("revenue", 10)
 
     margins = [y.pat / y.revenue * 100 for y in years if y.revenue > 0]
-    latest_margin = margins[-1] if margins else 0.0
-    avg_margin = sum(margins) / len(margins) if margins else 0.0
-    margin_stability = max(margins) - min(margins) if margins else 0.0
-    positive_cfo_years = sum(1 for y in years if y.cfo > 0)
-    conversion = [y.cfo / y.pat for y in years if y.pat > 0]
-    avg_cash_conversion = sum(conversion) / len(conversion) if conversion else 0.0
+    latest_margin = margins[-1] if margins else None
+    avg_margin = sum(margins) / len(margins) if margins else None
+    margin_stability = max(margins) - min(margins) if margins else None
+    positive_cfo_years = sum(1 for y in years if y.cfo is not None and y.cfo > 0)
+    conversion = [y.cfo / y.pat for y in years if y.cfo is not None and y.pat > 0]
+    avg_cash_conversion = sum(conversion) / len(conversion) if conversion else None
+
+    revenue_trend = "FLAT"
+    if len(years) >= 2:
+        revenue_trend = "UP" if latest.revenue > prior.revenue else "DOWN" if latest.revenue < prior.revenue else "FLAT"
+    pat_trend = "FLAT"
+    if len(years) >= 2:
+        pat_trend = "UP" if latest.pat > prior.pat else "DOWN" if latest.pat < prior.pat else "FLAT"
 
     hurdles = {
-        "roce_above_15": roce >= 15.0,
-        "clean_debt": de_ratio <= 1.0 or net_debt <= 0,
-        "cash_conversion_sound": cfo_to_pat >= 0.70,
-        "healthy_coverage": interest_coverage >= 3.5,
+        "roce_above_15": roce is not None and roce >= 15.0,
+        "clean_debt": (de_ratio is not None and de_ratio <= 1.0) or (net_debt is not None and net_debt <= 0),
+        "cash_conversion_sound": cfo_to_pat is not None and cfo_to_pat >= 0.70,
+        "healthy_coverage": interest_coverage is not None and interest_coverage >= 3.5,
         "five_year_cfo_positive": positive_cfo_years >= max(3, len(years) - 1),
     }
 
     return {
         "years_analyzed": len(years),
+        "history_years_available": len(years),
         "latest_fiscal_year": latest.fiscal_year,
-        "ROCE (%)": round(roce, 2),
-        "ROE (%)": round(roe, 2),
-        "Revenue YoY Growth (%)": round(rev_growth_yoy, 2),
-        "PAT YoY Growth (%)": round(pat_growth_yoy, 2),
-        "Revenue CAGR (%)": round(revenue_cagr, 2),
-        "PAT CAGR (%)": round(pat_cagr, 2),
-        "Latest PAT Margin (%)": round(latest_margin, 2),
-        "Average PAT Margin (%)": round(avg_margin, 2),
-        "PAT Margin Range (pp)": round(margin_stability, 2),
-        "Debt to Equity": round(de_ratio, 2),
-        "Net Debt (Cr)": round(net_debt, 2),
-        "Interest Coverage Ratio": round(interest_coverage, 2),
-        "CFO / PAT Quality Ratio": round(cfo_to_pat, 2),
-        "Average CFO / PAT (5Y)": round(avg_cash_conversion, 2),
+        "ROCE (%)": round(roce, 2) if roce is not None else None,
+        "ROE (%)": round(roe, 2) if roe is not None else None,
+        "Revenue YoY Growth (%)": round(rev_growth_yoy, 2) if rev_growth_yoy is not None else None,
+        "PAT YoY Growth (%)": round(pat_growth_yoy, 2) if pat_growth_yoy is not None else None,
+        "Revenue CAGR (%)": round(revenue_cagr, 2) if revenue_cagr is not None else None,
+        "PAT CAGR (%)": round(pat_cagr, 2) if pat_cagr is not None else None,
+        "Revenue CAGR 3Y (%)": round(revenue_cagr_3y, 2) if revenue_cagr_3y is not None else None,
+        "Revenue CAGR 5Y (%)": round(revenue_cagr_5y, 2) if revenue_cagr_5y is not None else None,
+        "Revenue CAGR 10Y (%)": round(revenue_cagr_10y, 2) if revenue_cagr_10y is not None else None,
+        "Latest PAT Margin (%)": round(latest_margin, 2) if latest_margin is not None else None,
+        "Average PAT Margin (%)": round(avg_margin, 2) if avg_margin is not None else None,
+        "PAT Margin Range (pp)": round(margin_stability, 2) if margin_stability is not None else None,
+        "Debt to Equity": round(de_ratio, 2) if de_ratio is not None else None,
+        "Net Debt (Cr)": round(net_debt, 2) if net_debt is not None else None,
+        "Interest Coverage Ratio": round(interest_coverage, 2) if interest_coverage is not None else None,
+        "CFO / PAT Quality Ratio": round(cfo_to_pat, 2) if cfo_to_pat is not None else None,
+        "Average CFO / PAT (5Y)": round(avg_cash_conversion, 2) if avg_cash_conversion is not None else None,
         "Positive CFO Years": f"{positive_cfo_years}/{len(years)}",
+        "trends": {"revenue": revenue_trend, "pat": pat_trend},
         "hurdles_passed": hurdles,
     }
 
 
 def calculate_quality_score(ratios: Dict[str, Any], governance_clean: bool = True) -> Dict[str, Any]:
     """Deterministic 100-point score. LLM explains the result; Python owns the score."""
+    roce = ratios["ROCE (%)"]
+    revenue_cagr = ratios["Revenue CAGR (%)"]
+    pat_cagr = ratios["PAT CAGR (%)"]
+    net_debt = ratios["Net Debt (Cr)"]
+    de_ratio = ratios["Debt to Equity"]
+    cfo_quality = ratios["CFO / PAT Quality Ratio"]
+    avg_conversion = ratios["Average CFO / PAT (5Y)"]
     components = {
-        "capital_efficiency": 20 if ratios["ROCE (%)"] >= 20 else 15 if ratios["ROCE (%)"] >= 15 else 8 if ratios["ROCE (%)"] >= 10 else 0,
-        "growth": 20 if ratios["Revenue CAGR (%)"] >= 15 and ratios["PAT CAGR (%)"] >= 15 else 15 if ratios["Revenue CAGR (%)"] >= 10 and ratios["PAT CAGR (%)"] >= 10 else 8 if ratios["Revenue CAGR (%)"] >= 5 else 0,
-        "balance_sheet": 20 if ratios["Net Debt (Cr)"] <= 0 else 15 if ratios["Debt to Equity"] <= 0.5 else 10 if ratios["Debt to Equity"] <= 1 else 0,
-        "cash_quality": 20 if ratios["CFO / PAT Quality Ratio"] >= 1 and ratios["Average CFO / PAT (5Y)"] >= 0.8 else 15 if ratios["CFO / PAT Quality Ratio"] >= 0.7 and ratios["Average CFO / PAT (5Y)"] >= 0.7 else 8 if ratios["Average CFO / PAT (5Y)"] >= 0.5 else 0,
+        "capital_efficiency": 20 if roce is not None and roce >= 20 else 15 if roce is not None and roce >= 15 else 8 if roce is not None and roce >= 10 else 0,
+        "growth": 20 if revenue_cagr is not None and pat_cagr is not None and revenue_cagr >= 15 and pat_cagr >= 15 else 15 if revenue_cagr is not None and pat_cagr is not None and revenue_cagr >= 10 and pat_cagr >= 10 else 8 if revenue_cagr is not None and revenue_cagr >= 5 else 0,
+        "balance_sheet": 20 if net_debt is not None and net_debt <= 0 else 15 if de_ratio is not None and de_ratio <= 0.5 else 10 if de_ratio is not None and de_ratio <= 1 else 0,
+        "cash_quality": 20 if cfo_quality is not None and avg_conversion is not None and cfo_quality >= 1 and avg_conversion >= 0.8 else 15 if cfo_quality is not None and avg_conversion is not None and cfo_quality >= 0.7 and avg_conversion >= 0.7 else 8 if avg_conversion is not None and avg_conversion >= 0.5 else 0,
         "governance": 20 if governance_clean else 0,
     }
     score = sum(components.values())
@@ -115,9 +154,11 @@ def calculate_quality_score(ratios: Dict[str, Any], governance_clean: bool = Tru
     return {"score_100": score, "rating": rating, "components": components}
 
 
-def calculate_pe_valuation(current_price: float, shares_outstanding_cr: float, latest_pat_cr: float, pat_cagr_pct: float, target_pe: float = 25.0, margin_of_safety_pct: float = 20.0) -> Dict[str, Any]:
+def calculate_pe_valuation(current_price: float, shares_outstanding_cr: float, latest_pat_cr: float, pat_cagr_pct: float | None, target_pe: float = 25.0, margin_of_safety_pct: float = 20.0) -> Dict[str, Any]:
     if current_price <= 0 or shares_outstanding_cr <= 0 or latest_pat_cr <= 0:
         return {"available": False, "reason": "Valid price, shares outstanding and PAT are required."}
+    if pat_cagr_pct is None:
+        return {"available": False, "reason": "PAT CAGR is unavailable; valuation is withheld rather than treating missing growth as zero."}
     eps = latest_pat_cr / shares_outstanding_cr
     fair_value = eps * target_pe
     buy_below = fair_value * (1 - margin_of_safety_pct / 100)
