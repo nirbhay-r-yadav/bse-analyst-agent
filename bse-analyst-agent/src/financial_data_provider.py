@@ -73,18 +73,34 @@ class StructuredFinancialProvider:
         text = " ".join(str(v).lower() for v in row.values() if isinstance(v, (str, int, float)))
         return "audited" in text and "consolidated" in text and "standalone" not in text and "non-consolidated" not in text
 
-    def _nse_xbrl_rows(self, symbol: str) -> list[tuple[str, bytes]]:
+    @staticmethod
+    def _nse_row_fiscal_year(row: dict[str, Any]) -> str | None:
+        """Return NSE's authoritative fiscal-year label from filing metadata."""
+        value = row.get("financialYear")
+        if isinstance(value, str):
+            match = re.search(r"31-Mar-(\d{4})", value, re.IGNORECASE)
+            if match:
+                return f"FY{match.group(1)}"
+        value = row.get("toDate")
+        if isinstance(value, str):
+            match = re.search(r"31-Mar-(\d{4})", value, re.IGNORECASE)
+            if match:
+                return f"FY{match.group(1)}"
+        return None
+
+    def _nse_xbrl_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
+        """Download audited consolidated XBRL plus NSE filing fiscal-year metadata."""
         rows = self._nse_annual_rows(symbol)
-        candidates: list[str] = []
+        candidates: list[tuple[str, str | None]] = []
         for row in rows:
             url = self._xbrl_url(row)
             if url and self._is_audited_consolidated(row):
-                candidates.append(url)
+                candidates.append((url, self._nse_row_fiscal_year(row)))
         if not candidates:
-            candidates = [url for row in rows if (url := self._xbrl_url(row))]
-        records: list[tuple[str, bytes]] = []
+            candidates = [(url, self._nse_row_fiscal_year(row)) for row in rows if (url := self._xbrl_url(row))]
+        records: list[tuple[str, bytes, str | None]] = []
         seen: set[str] = set()
-        for url in candidates[:12]:
+        for url, fiscal_year in candidates[:12]:
             if url in seen:
                 continue
             seen.add(url)
@@ -92,10 +108,13 @@ class StructuredFinancialProvider:
                 response = self.session.get(url, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
                 response.raise_for_status()
                 if response.content:
-                    records.append((url, response.content))
+                    records.append((url, response.content, fiscal_year))
             except requests.RequestException:
                 continue
         return records
+
+    def _nse_xbrl_rows(self, symbol: str) -> list[tuple[str, bytes]]:
+        return [(url, xml_content) for url, xml_content, _ in self._nse_xbrl_records(symbol)]
 
     @staticmethod
     def _reliable_records(records: list[AnnualFinancials]) -> list[AnnualFinancials]:
@@ -136,7 +155,7 @@ class StructuredFinancialProvider:
         text = str(tag)
         return text.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
 
-    def _parse_nse_xbrl(self, xml_content: bytes, symbol: str) -> AnnualFinancials:
+    def _parse_nse_xbrl(self, xml_content: bytes, symbol: str, fiscal_year_override: str | None = None) -> AnnualFinancials:
         root = ET.fromstring(xml_content)
         contexts: dict[str, dict[str, Any]] = {}
         for element in root.iter():
@@ -145,7 +164,7 @@ class StructuredFinancialProvider:
             context_id = element.attrib.get("id")
             if not context_id:
                 continue
-            start_date = end_date = None
+            start_date = end_date = instant_date = None
             has_dimensions = False
             for child in element.iter():
                 local = self._local_name(child.tag)
@@ -153,12 +172,17 @@ class StructuredFinancialProvider:
                     start_date = child.text
                 elif local == "enddate":
                     end_date = child.text
+                elif local == "instant":
+                    instant_date = child.text
                 elif local in {"explicitmember", "typedmember"}:
                     has_dimensions = True
             end = self._xbrl_date(end_date)
             start = self._xbrl_date(start_date)
+            instant = self._xbrl_date(instant_date)
             fiscal_year = None
             context_type = "instant"
+            context_lower = context_id.lower()
+
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days if end is not None else 0
@@ -166,7 +190,19 @@ class StructuredFinancialProvider:
                     fiscal_year = f"FY{end.year}"
             elif end is not None and end.month == 3 and end.day == 31:
                 fiscal_year = f"FY{end.year}"
-            if fiscal_year is None and context_id.lower() == "fourd" and end is not None:
+            elif instant is not None:
+                fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
+
+            # Older NSE Ind-AS XBRL files label annual duration contexts with
+            # names such as FourD / FourOperatingExpenses01D, but their XML
+            # dates incorrectly describe only Jan-Mar. NSE's filing metadata is
+            # authoritative for the fiscal year; use it only for these
+            # explicitly annual-looking Four* duration contexts.
+            if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
+                fiscal_year = fiscal_year_override
+                context_type = "duration"
+
+            if fiscal_year is None and context_lower == "fourd" and end is not None:
                 fiscal_year = f"FY{end.year}"
                 context_type = "duration"
             if fiscal_year:
@@ -175,15 +211,17 @@ class StructuredFinancialProvider:
         if not any(c.get("fiscal_year") for c in contexts.values()):
             raw = xml_content.decode("utf-8", errors="ignore")
             context_pattern = re.compile(r"<(?P<tag>(?:[A-Za-z0-9_.-]+:)?context)\b[^>]*\bid=[\"'](?P<id>[^\"']+)[\"'][^>]*>(?P<body>.*?)</(?:[A-Za-z0-9_.-]+:)?context\s*>", re.IGNORECASE | re.DOTALL)
-            date_pattern = re.compile(r"<(?:[A-Za-z0-9_.-]+:)?(?P<name>startDate|endDate)\b[^>]*>\s*(?P<value>[^<]+)\s*</(?:[A-Za-z0-9_.-]+:)?(?P=name)>", re.IGNORECASE)
+            date_pattern = re.compile(r"<(?:[A-Za-z0-9_.-]+:)?(?P<name>startDate|endDate|instant)\b[^>]*>\s*(?P<value>[^<]+)\s*</(?:[A-Za-z0-9_.-]+:)?(?P=name)>", re.IGNORECASE)
             for match in context_pattern.finditer(raw):
                 context_id = match.group("id")
                 body = match.group("body")
                 dates = {m.group("name").lower(): m.group("value") for m in date_pattern.finditer(body)}
                 end = self._xbrl_date(dates.get("enddate"))
                 start = self._xbrl_date(dates.get("startdate"))
+                instant = self._xbrl_date(dates.get("instant"))
                 fiscal_year = None
                 context_type = "instant"
+                context_lower = context_id.lower()
                 if start is not None:
                     context_type = "duration"
                     days = (end - start).days if end is not None else 0
@@ -191,7 +229,12 @@ class StructuredFinancialProvider:
                         fiscal_year = f"FY{end.year}"
                 elif end is not None and end.month == 3 and end.day == 31:
                     fiscal_year = f"FY{end.year}"
-                if fiscal_year is None and context_id.lower() == "fourd" and end is not None:
+                elif instant is not None:
+                    fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
+                if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
+                    fiscal_year = fiscal_year_override
+                    context_type = "duration"
+                if fiscal_year is None and context_lower == "fourd" and end is not None:
                     fiscal_year = f"FY{end.year}"
                     context_type = "duration"
                 if fiscal_year:
@@ -214,7 +257,7 @@ class StructuredFinancialProvider:
         fiscal_years = {c["fiscal_year"] for c in contexts.values()}
         if not fiscal_years:
             raise FinancialDataError(f"No annual fiscal-year context found in NSE XBRL for {symbol}")
-        fiscal_year = max(fiscal_years)
+        fiscal_year = fiscal_year_override or max(fiscal_years)
 
         revenue = self._nse_xbrl_value(facts, ("RevenueFromOperations",), "duration", fiscal_year)
         pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
@@ -247,9 +290,9 @@ class StructuredFinancialProvider:
     def _nse_history(self, symbol: str) -> CompanyFinancialHistory:
         records: list[AnnualFinancials] = []
         errors: list[str] = []
-        for _, xml_content in self._nse_xbrl_rows(symbol):
+        for _, xml_content, fiscal_year in self._nse_xbrl_records(symbol):
             try:
-                records.append(self._parse_nse_xbrl(xml_content, symbol))
+                records.append(self._parse_nse_xbrl(xml_content, symbol, fiscal_year_override=fiscal_year))
             except (ET.ParseError, FinancialDataError) as exc:
                 errors.append(str(exc))
         records = self._reliable_records(records)
