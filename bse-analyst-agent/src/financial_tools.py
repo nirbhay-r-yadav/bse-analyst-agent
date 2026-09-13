@@ -73,11 +73,14 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     pat_cagr = _cagr(latest.pat, first.pat, len(years) - 1)
 
     def period_cagr(field: str, period: int) -> float | None:
-        if len(years) <= period:
+        # "3Y" / "5Y" / "10Y" means the span covered by that many annual observations
+        # in this engine. Therefore a 3-year history has a 3Y CAGR, a 10-year history
+        # has a 10Y CAGR, and the earliest observation is period observations back.
+        if len(years) < period:
             return None
-        old = getattr(years[-(period + 1)], field)
+        old = getattr(years[-period], field)
         new = getattr(latest, field)
-        return _cagr(new, old, period) if new is not None and old is not None else None
+        return _cagr(new, old, period - 1) if new is not None and old is not None else None
 
     revenue_cagr_3y = period_cagr("revenue", 3)
     revenue_cagr_5y = period_cagr("revenue", 5)
