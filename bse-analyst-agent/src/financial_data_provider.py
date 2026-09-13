@@ -25,11 +25,6 @@ class FinancialDataError(RuntimeError):
 class StructuredFinancialProvider:
     NSE_RESULTS_URL = "https://www.nseindia.com/api/corporates-financial-results"
     NSE_RESULTS_PAGE = "https://www.nseindia.com/companies-listing/corporate-filings-financial-results"
-    SCREENER_SEARCH_URL = "https://www.screener.in/api/company/search/"
-    SCREENER_URLS = (
-        "https://www.screener.in/company/{symbol}/consolidated/",
-        "https://www.screener.in/company/{symbol}/",
-    )
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
@@ -67,10 +62,9 @@ class StructuredFinancialProvider:
         rows = payload.get("data", []) if isinstance(payload, dict) else payload
         return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
-    @classmethod
-    def _xbrl_url(cls, row: dict[str, Any]) -> str | None:
-        preferred = ("xbrl", "xbrlFileName", "xbrlFile", "xbrl_file_name", "xbrlFileLink", "xbrl_file_link")
-        for key in preferred:
+    @staticmethod
+    def _xbrl_url(row: dict[str, Any]) -> str | None:
+        for key in ("xbrl", "xbrlFileName", "xbrlFile", "xbrl_file_name", "xbrlFileLink", "xbrl_file_link"):
             value = row.get(key)
             if isinstance(value, str) and value.startswith("http") and value.lower().endswith((".xml", ".xbrl")):
                 return value
@@ -125,11 +119,9 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _xbrl_date(value: Any) -> datetime | None:
-        """Parse XBRL dates defensively across NSE date representations."""
         if not value:
             return None
-        text = str(value).strip()
-        match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+        match = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(value).strip())
         if not match:
             return None
         try:
@@ -157,7 +149,7 @@ class StructuredFinancialProvider:
                     start_date = child.text
                 elif local == "enddate":
                     end_date = child.text
-                elif local == "explicitmember"::
+                elif local == "explicitmember":
                     has_dimensions = True
 
             end = self._xbrl_date(end_date)
@@ -170,9 +162,9 @@ class StructuredFinancialProvider:
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days
-                # Indian FY is normally 1 Apr -> 31 Mar. Allow small source-format
-                # variations while rejecting quarterly/half-year contexts.
-                if end.month == 3 and end.day == 31 and (start.month == 4 and start.day == 1 or 300 <= days <= 370):
+                if end.month == 3 and end.day == 31 and (
+                    (start.month == 4 and start.day == 1) or 300 <= days <= 370
+                ):
                     fiscal_year = f"FY{end.year}"
             elif end.month == 3 and end.day == 31:
                 fiscal_year = f"FY{end.year}"
