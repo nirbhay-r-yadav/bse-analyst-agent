@@ -42,8 +42,24 @@ class FinancialToolsTests(unittest.TestCase):
         self.assertEqual(ratios["history_years_available"], 5)
         self.assertGreater(ratios["ROCE (%)"], 15)
         self.assertGreater(ratios["Revenue CAGR (%)"], 10)
+        self.assertGreater(ratios["PAT CAGR (%)"], 10)
         self.assertIsNone(ratios["Revenue CAGR 10Y (%)"])
         self.assertEqual(ratios["Positive CFO Years"], "5/5")
+
+    def test_pat_cagr_matches_compounded_growth(self):
+        ratios = calculate_fundamental_ratios(self.history)
+        # PAT grows from 120 to 210 across four year-to-year intervals.
+        expected = ((210 / 120) ** (1 / 4) - 1) * 100
+        self.assertAlmostEqual(ratios["PAT CAGR (%)"], round(expected, 2), places=2)
+
+    def test_pat_cagr_can_be_negative_for_profitable_decline(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2022", revenue=1000, ebit=150, pat=100),
+            AnnualFinancials(fiscal_year="FY2023", revenue=1050, ebit=140, pat=90),
+            AnnualFinancials(fiscal_year="FY2024", revenue=1100, ebit=130, pat=80),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertLess(ratios["PAT CAGR (%)"], 0)
 
     def test_score_is_deterministic(self):
         ratios = calculate_fundamental_ratios(self.history)
