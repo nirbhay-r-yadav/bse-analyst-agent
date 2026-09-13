@@ -74,13 +74,22 @@ def run_corporate_risk_only(symbol: str, report_years: int = 10, live_filings: b
         except Exception as exc:
             print(f"[!] Could not audit {fy}: {type(exc).__name__}: {exc}")
 
+        requested_reports = min(report_years, 10)
+
     if not reports:
-        report_gap = "No annual reports available from NSE"
-    elif len(audits) < min(report_years, len(reports)):
-        report_gap = f"Only {len(audits)}/{len(reports)} available reports were successfully audited"
+        report_gap = "No annual reports available"
+    elif len(reports) < requested_reports:
+        report_gap = (
+            f"Only {len(reports)}/{requested_reports} requested "
+            "annual reports are available"
+        )
+    elif len(audits) < len(reports):
+        report_gap = (
+            f"Only {len(audits)}/{len(reports)} available reports "
+            "were successfully audited"
+        )
     else:
         report_gap = None
-
     announcements = extract_announcements_from_rows(
         [*filing_data.get("announcements", []), *filing_data.get("pit_risk_rows", [])]
     )
@@ -107,6 +116,9 @@ def run_corporate_risk_only(symbol: str, report_years: int = 10, live_filings: b
         "governance_grade": corporate.governance_grade,
         "risk_score": corporate.risk_score,
         "annual_report_score": corporate.annual_report_score,
+        "reports_requested": min(report_years, 10),
+        "reports_available": len(reports),
+        "reports_scanned": len(audits),
         "hard_fail": corporate.hard_fail,
         "risk_flags": list(corporate.risk_flags or []),
         "positive_signals": list(corporate.positive_signals or []),
@@ -230,7 +242,10 @@ def run_corporate_risk_only(symbol: str, report_years: int = 10, live_filings: b
     else:
         print("  None identified.")
 
-    print("10-YEAR HISTORY")
+    print("ANNUAL REPORT HISTORY")
+    print(
+        f"  Reports Scanned    : {len(audits)}/{min(report_years, 10)} requested"
+    )
     print(
         "  FY       Audit      Related Party    "
         "Contingent Risk    Flags"
