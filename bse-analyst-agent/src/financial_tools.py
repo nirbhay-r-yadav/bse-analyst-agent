@@ -70,7 +70,12 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
     roce_trend = "FLAT"
     if roce_yoy_change is not None:
         roce_trend = "UP" if roce_yoy_change > 0 else "DOWN" if roce_yoy_change < 0 else "FLAT"
-    valid_roce_values = [value for year in years if (value := calculate_roce(year)) is not None]
+    roce_history = {
+        year.fiscal_year: round(value, 2)
+        for year in years
+        if (value := calculate_roce(year)) is not None
+    }
+    valid_roce_values = list(roce_history.values())
     average_roce = sum(valid_roce_values) / len(valid_roce_values) if valid_roce_values else None
 
     capital_employed = None
@@ -104,7 +109,12 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
 
     # PAT margin is valid even when PAT is negative: PAT / positive revenue
     # correctly captures a loss-making year as a negative margin.
-    margins = [y.pat / y.revenue * 100 for y in years if y.revenue > 0]
+    pat_margin_history = {
+        year.fiscal_year: round(year.pat / year.revenue * 100, 2)
+        for year in years
+        if year.revenue > 0
+    }
+    margins = list(pat_margin_history.values())
     latest_margin = margins[-1] if margins else None
     avg_margin = sum(margins) / len(margins) if margins else None
     margin_range = max(margins) - min(margins) if margins else None
@@ -138,6 +148,10 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "latest_fiscal_year": latest.fiscal_year,
         "ROCE (%)": round(roce, 2) if roce is not None else None,
         "Average ROCE (%)": round(average_roce, 2) if average_roce is not None else None,
+        "ROCE History (%)": roce_history,
+        "Minimum ROCE (%)": round(min(valid_roce_values), 2) if valid_roce_values else None,
+        "Maximum ROCE (%)": round(max(valid_roce_values), 2) if valid_roce_values else None,
+        "ROCE Range (pp)": round(max(valid_roce_values) - min(valid_roce_values), 2) if valid_roce_values else None,
         "ROCE YoY Change (pp)": round(roce_yoy_change, 2) if roce_yoy_change is not None else None,
         "ROCE Trend": roce_trend,
         "ROE (%)": round(roe, 2) if roe is not None else None,
@@ -150,6 +164,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "Revenue CAGR 10Y (%)": round(revenue_cagr_10y, 2) if revenue_cagr_10y is not None else None,
         "Latest PAT Margin (%)": round(latest_margin, 2) if latest_margin is not None else None,
         "Average PAT Margin (%)": round(avg_margin, 2) if avg_margin is not None else None,
+        "PAT Margin History (%)": pat_margin_history,
+        "Minimum PAT Margin (%)": round(min(margins), 2) if margins else None,
+        "Maximum PAT Margin (%)": round(max(margins), 2) if margins else None,
         "PAT Margin Range (pp)": round(margin_range, 2) if margin_range is not None else None,
         "PAT Margin YoY Change (pp)": round(pat_margin_yoy_change, 2) if pat_margin_yoy_change is not None else None,
         "PAT Margin Trend": pat_margin_trend,
@@ -226,9 +243,7 @@ def determine_final_recommendation(quality: Dict[str, Any], ratios: Dict[str, An
         if score >= 80 and price <= buy_below:
             return {"verdict": "BUY", "reason": "High quality and price is at or below the margin-of-safety level."}
         if price <= fair_value:
-            return {"verdict": "WATCHLIST", "reason": "Quality is acceptable, but the price is above the preferred margin-of-safety level."}
-        return {"verdict": "WATCHLIST", "reason": "Business quality may be acceptable, but valuation leaves insufficient margin of safety."}
+            return {"verdict": "WATCH/BUY", "reason": "Quality clears the minimum threshold and price is at or below fair value."}
+        return {"verdict": "WATCH", "reason": "Quality is acceptable but price is above fair value."}
 
-    if score >= 80:
-        return {"verdict": "BUY", "reason": "Quality score is at least 80/100 and no hard governance failure was detected."}
-    return {"verdict": "WATCHLIST", "reason": "Fundamentals are acceptable but do not meet the high-conviction quality threshold."}
+    return {"verdict": "WATCH", "reason": "Quality clears the minimum threshold; valuation is unavailable."}
