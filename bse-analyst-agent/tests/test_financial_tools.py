@@ -61,6 +61,55 @@ class FinancialToolsTests(unittest.TestCase):
         ratios = calculate_fundamental_ratios(history)
         self.assertLess(ratios["PAT CAGR (%)"], 0)
 
+    def test_pat_margin_is_calculated_from_pat_over_revenue(self):
+        ratios = calculate_fundamental_ratios(self.history)
+        self.assertEqual(ratios["Latest PAT Margin (%)"], round(210 / 1600 * 100, 2))
+        expected_average = sum([
+            120 / 1000 * 100,
+            135 / 1120 * 100,
+            155 / 1260 * 100,
+            180 / 1420 * 100,
+            210 / 1600 * 100,
+        ]) / 5
+        self.assertEqual(ratios["Average PAT Margin (%)"], round(expected_average, 2))
+
+    def test_pat_margin_expansion_is_detected(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2024", revenue=1000, ebit=150, pat=80),
+            AnnualFinancials(fiscal_year="FY2025", revenue=1100, ebit=180, pat=100),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1200, ebit=220, pat=132),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], 1.0)
+        self.assertEqual(ratios["PAT Margin Trend"], "UP")
+
+    def test_pat_margin_contraction_is_detected(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2024", revenue=1000, ebit=180, pat=120),
+            AnnualFinancials(fiscal_year="FY2025", revenue=1100, ebit=180, pat=110),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], -1.91)
+        self.assertEqual(ratios["PAT Margin Trend"], "DOWN")
+
+    def test_negative_pat_produces_negative_margin(self):
+        history = CompanyFinancialHistory(years=[
+            AnnualFinancials(fiscal_year="FY2025", revenue=1000, ebit=50, pat=-20),
+            AnnualFinancials(fiscal_year="FY2026", revenue=1100, ebit=60, pat=-11),
+        ])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertEqual(ratios["Latest PAT Margin (%)"], -1.0)
+        self.assertEqual(ratios["PAT Margin YoY Change (pp)"], 1.0)
+        self.assertEqual(ratios["PAT Margin Trend"], "UP")
+
+    def test_one_year_history_has_no_pat_margin_yoy_change(self):
+        history = CompanyFinancialHistory(years=[make_year(2026)])
+        ratios = calculate_fundamental_ratios(history)
+        self.assertIsNotNone(ratios["Latest PAT Margin (%)"])
+        self.assertIsNotNone(ratios["Average PAT Margin (%)"])
+        self.assertIsNone(ratios["PAT Margin YoY Change (pp)"])
+        self.assertEqual(ratios["PAT Margin Trend"], "FLAT")
+
     def test_score_is_deterministic(self):
         ratios = calculate_fundamental_ratios(self.history)
         score = calculate_quality_score(ratios, governance_clean=True)
