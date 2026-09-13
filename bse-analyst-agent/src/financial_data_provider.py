@@ -1,10 +1,4 @@
-"""Structured financial-data provider for deep-stock analysis.
-
-Primary accounting source: NSE annual audited consolidated XBRL filings.
-Annual-report PDFs remain qualitative evidence for governance, forensic and
-management analysis. Screener is retained only as a legacy fallback helper.
-"""
-
+"""Structured financial-data provider for deep-stock analysis."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -13,7 +7,6 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 import requests
-from bs4 import BeautifulSoup
 
 from .financial_tools import AnnualFinancials, CompanyFinancialHistory
 
@@ -49,7 +42,12 @@ class StructuredFinancialProvider:
     def _nse_annual_rows(self, symbol: str) -> list[dict[str, Any]]:
         self._warm_nse()
         try:
-            response = self.session.get(self.NSE_RESULTS_URL, params={"index": "equities", "period": "Annual", "symbol": symbol}, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
+            response = self.session.get(
+                self.NSE_RESULTS_URL,
+                params={"index": "equities", "period": "Annual", "symbol": symbol},
+                headers={"Referer": self.NSE_RESULTS_PAGE},
+                timeout=self.timeout,
+            )
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -75,30 +73,24 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _nse_row_fiscal_year(row: dict[str, Any]) -> str | None:
-        """Return NSE's authoritative fiscal-year label from filing metadata."""
-        value = row.get("financialYear")
-        if isinstance(value, str):
-            match = re.search(r"31-Mar-(\d{4})", value, re.IGNORECASE)
-            if match:
-                return f"FY{match.group(1)}"
-        value = row.get("toDate")
-        if isinstance(value, str):
-            match = re.search(r"31-Mar-(\d{4})", value, re.IGNORECASE)
-            if match:
-                return f"FY{match.group(1)}"
+        for key in ("financialYear", "toDate"):
+            value = row.get(key)
+            if isinstance(value, str):
+                match = re.search(r"31-Mar-(\d{4})", value, re.IGNORECASE)
+                if match:
+                    return f"FY{match.group(1)}"
         return None
 
     def _nse_xbrl_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
-        """Download audited consolidated XBRL plus NSE filing fiscal-year metadata."""
         rows = self._nse_annual_rows(symbol)
-        candidates: list[tuple[str, str | None]] = []
+        candidates = []
         for row in rows:
             url = self._xbrl_url(row)
             if url and self._is_audited_consolidated(row):
                 candidates.append((url, self._nse_row_fiscal_year(row)))
         if not candidates:
             candidates = [(url, self._nse_row_fiscal_year(row)) for row in rows if (url := self._xbrl_url(row))]
-        records: list[tuple[str, bytes, str | None]] = []
+        records = []
         seen: set[str] = set()
         for url, fiscal_year in candidates[:12]:
             if url in seen:
@@ -124,15 +116,12 @@ class StructuredFinancialProvider:
 
     @staticmethod
     def _nse_xbrl_value(facts: dict[str, list[tuple[dict[str, Any], float]]], names: tuple[str, ...], context_type: str, fiscal_year: str) -> float | None:
-        # _local_name() normalizes fact keys to lowercase, so normalize the
-        # requested names as well. This was the reason valid NSE facts such as
-        # RevenueFromOperations were being collected but never matched.
-        normalized_names = tuple(name.lower() for name in names)
-        for name in normalized_names:
+        names = tuple(name.lower() for name in names)
+        for name in names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year and not context.get("has_dimensions"):
                     return value
-        for name in normalized_names:
+        for name in names:
             for context, value in facts.get(name, []):
                 if context.get("type") == context_type and context.get("fiscal_year") == fiscal_year:
                     return value
@@ -182,7 +171,6 @@ class StructuredFinancialProvider:
             fiscal_year = None
             context_type = "instant"
             context_lower = context_id.lower()
-
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days if end is not None else 0
@@ -192,16 +180,9 @@ class StructuredFinancialProvider:
                 fiscal_year = f"FY{end.year}"
             elif instant is not None:
                 fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
-
-            # Older NSE Ind-AS XBRL files label annual duration contexts with
-            # names such as FourD / FourOperatingExpenses01D, but their XML
-            # dates incorrectly describe only Jan-Mar. NSE's filing metadata is
-            # authoritative for the fiscal year; use it only for these
-            # explicitly annual-looking Four* duration contexts.
             if fiscal_year_override and context_lower.startswith("four") and context_lower.endswith("d"):
                 fiscal_year = fiscal_year_override
                 context_type = "duration"
-
             if fiscal_year is None and context_lower == "fourd" and end is not None:
                 fiscal_year = f"FY{end.year}"
                 context_type = "duration"
@@ -258,7 +239,6 @@ class StructuredFinancialProvider:
         if not fiscal_years:
             raise FinancialDataError(f"No annual fiscal-year context found in NSE XBRL for {symbol}")
         fiscal_year = fiscal_year_override or max(fiscal_years)
-
         revenue = self._nse_xbrl_value(facts, ("RevenueFromOperations",), "duration", fiscal_year)
         pat = self._nse_xbrl_value(facts, ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"), "duration", fiscal_year)
         ebit = self._nse_xbrl_value(facts, ("SegmentProfitLossBeforeTaxAndFinanceCosts", "ProfitLossBeforeTaxAndFinanceCosts"), "duration", fiscal_year)
@@ -267,13 +247,11 @@ class StructuredFinancialProvider:
         debt_current = self._nse_xbrl_value(facts, ("BorrowingsCurrent",), "instant", fiscal_year)
         debt_noncurrent = self._nse_xbrl_value(facts, ("BorrowingsNoncurrent",), "instant", fiscal_year)
         cash = self._nse_xbrl_value(facts, ("CashAndCashEquivalents",), "instant", fiscal_year)
-        cfo = self._nse_xbrl_value(facts, ("CashFlowsFromUsedInOperatingActivities",), "duration", fiscal_year)
+        cfo = self._nse_xbrl_value(facts, ("CashFlowsFromUsedInOperatingActivities", "CashFlowsFromUsedInOperations"), "duration", fiscal_year)
         capex = self._nse_xbrl_value(facts, ("PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",), "duration", fiscal_year)
-
         if revenue is None or pat is None:
             raise FinancialDataError(f"Incomplete NSE XBRL financial data for {symbol} {fiscal_year}")
         total_debt = debt_current + debt_noncurrent if debt_current is not None and debt_noncurrent is not None else None
-
         return AnnualFinancials(
             fiscal_year=fiscal_year,
             revenue=revenue / 10000000,
