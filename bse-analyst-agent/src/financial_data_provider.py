@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -18,6 +20,9 @@ class FinancialDataError(RuntimeError):
 class StructuredFinancialProvider:
     NSE_RESULTS_URL = "https://www.nseindia.com/api/corporates-financial-results"
     NSE_RESULTS_PAGE = "https://www.nseindia.com/companies-listing/corporate-filings-financial-results"
+    NSE_INTEGRATED_URL = "https://www.nseindia.com/api/integrated-filing-results"
+    NSE_INTEGRATED_PAGE = "https://www.nseindia.com/companies-listing/corporate-integrated-filing"
+    RAW_DATA_DIR = Path("data/financial_raw")
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
@@ -33,20 +38,51 @@ class StructuredFinancialProvider:
     def _symbol(symbol: str) -> str:
         return symbol.upper().strip().removesuffix(".NS").removesuffix(".BO")
 
-    def _warm_nse(self) -> None:
+    def _warm_nse(self, page: str | None = None) -> None:
         try:
-            self.session.get(self.NSE_RESULTS_PAGE, timeout=self.timeout)
+            self.session.get(page or self.NSE_RESULTS_PAGE, timeout=self.timeout)
         except requests.RequestException:
             pass
 
     def _nse_annual_rows(self, symbol: str) -> list[dict[str, Any]]:
         self._warm_nse()
         try:
-            response = self.session.get(self.NSE_RESULTS_URL, params={"index": "equities", "period": "Annual", "symbol": symbol}, headers={"Referer": self.NSE_RESULTS_PAGE}, timeout=self.timeout)
+            response = self.session.get(
+                self.NSE_RESULTS_URL,
+                params={"index": "equities", "period": "Annual", "symbol": symbol},
+                headers={"Referer": self.NSE_RESULTS_PAGE},
+                timeout=self.timeout,
+            )
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             raise FinancialDataError(f"NSE annual financial-results request failed for {symbol}: {exc}") from exc
+        rows = payload.get("data", []) if isinstance(payload, dict) else payload
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+    def _nse_integrated_rows(self, symbol: str) -> list[dict[str, Any]]:
+        self._warm_nse(self.NSE_INTEGRATED_PAGE)
+        try:
+            response = self.session.get(
+                self.NSE_INTEGRATED_URL,
+                params={
+                    "type": "Integrated Filing- Financials",
+                    "index": "equities",
+                    "symbol": symbol,
+                    "period_ended": "all",
+                    "page": 1,
+                    "size": 50,
+                },
+                headers={
+                    "Referer": self.NSE_INTEGRATED_PAGE,
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise FinancialDataError(f"NSE integrated-filing request failed for {symbol}: {exc}") from exc
         rows = payload.get("data", []) if isinstance(payload, dict) else payload
         return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
@@ -86,7 +122,81 @@ class StructuredFinancialProvider:
             score += 30
         return score
 
+    @staticmethod
+    def _xbrl_contexts(xml_content: bytes) -> dict[str, dict[str, Any]]:
+        root = ET.fromstring(xml_content)
+        contexts: dict[str, dict[str, Any]] = {}
+        for element in root.iter():
+            if str(element.tag).rsplit("}", 1)[-1].lower() != "context":
+                continue
+            context_id = element.attrib.get("id")
+            if not context_id:
+                continue
+            start_date = end_date = instant_date = None
+            dimensions: list[dict[str, str]] = []
+            for child in element.iter():
+                local = str(child.tag).rsplit("}", 1)[-1].rsplit(":", 1)[-1]
+                if local.lower() == "startdate":
+                    start_date = child.text
+                elif local.lower() == "enddate":
+                    end_date = child.text
+                elif local.lower() == "instant":
+                    instant_date = child.text
+                elif local.lower() in {"explicitmember", "typedmember"}:
+                    dimensions.append({"type": local, "dimension": str(child.attrib.get("dimension", "")), "value": str(child.text or "")})
+            contexts[context_id] = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "instant": instant_date,
+                "dimensions": dimensions,
+                "has_dimensions": bool(dimensions),
+            }
+        return contexts
+
+    @staticmethod
+    def _annual_fiscal_year(xml_content: bytes) -> str | None:
+        contexts = StructuredFinancialProvider._xbrl_contexts(xml_content)
+        annual_years: list[int] = []
+        for context in contexts.values():
+            start = StructuredFinancialProvider._xbrl_date(context.get("start_date"))
+            end = StructuredFinancialProvider._xbrl_date(context.get("end_date"))
+            if start is None or end is None or end.month != 3 or end.day != 31:
+                continue
+            days = (end - start).days
+            if 300 <= days <= 370 and not context.get("has_dimensions"):
+                annual_years.append(end.year)
+        return f"FY{max(annual_years)}" if annual_years else None
+
+    def _nse_integrated_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
+        rows = self._nse_integrated_rows(symbol)
+        records: list[tuple[str, bytes, str | None]] = []
+        seen: set[str] = set()
+        for row in rows:
+            url = self._xbrl_url(row)
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            try:
+                response = self.session.get(url, headers={"Referer": self.NSE_INTEGRATED_PAGE}, timeout=self.timeout)
+                response.raise_for_status()
+                if not response.content:
+                    continue
+                fiscal_year = self._annual_fiscal_year(response.content)
+                # Integrated filings include quarterly/YTD filings as well. Only keep
+                # contexts representing a full financial year for AnnualFinancials.
+                if fiscal_year:
+                    records.append((url, response.content, fiscal_year))
+            except (requests.RequestException, ET.ParseError):
+                continue
+        return records
+
     def _nse_xbrl_records(self, symbol: str) -> list[tuple[str, bytes, str | None]]:
+        integrated: list[tuple[str, bytes, str | None]] = []
+        try:
+            integrated = self._nse_integrated_records(symbol)
+        except FinancialDataError:
+            integrated = []
+
         rows = self._nse_annual_rows(symbol)
         best_by_year: dict[str, tuple[int, str, str | None]] = {}
         fallback: list[tuple[int, str, str | None]] = []
@@ -107,8 +217,8 @@ class StructuredFinancialProvider:
         if len(candidates) < 10:
             candidates.extend(sorted(fallback, key=lambda item: item[0], reverse=True)[: 10 - len(candidates)])
 
-        records = []
-        seen: set[str] = set()
+        records = list(integrated)
+        seen = {url for url, _, _ in records}
         for _, url, fiscal_year in candidates[:12]:
             if url in seen:
                 continue
@@ -122,8 +232,48 @@ class StructuredFinancialProvider:
                 continue
         return records
 
-    def _nse_xbrl_rows(self, symbol: str) -> list[tuple[str, bytes]]:
-        return [(url, xml_content) for url, xml_content, _ in self._nse_xbrl_records(symbol)]
+    def _store_raw_xbrl(self, symbol: str, url: str, xml_content: bytes, fiscal_year: str | None) -> None:
+        """Persist raw NSE XBRL facts without reducing them to AnnualFinancials."""
+        if not fiscal_year:
+            return
+        try:
+            contexts = self._xbrl_contexts(xml_content)
+            root = ET.fromstring(xml_content)
+            facts: list[dict[str, Any]] = []
+            for element in root.iter():
+                context_ref = element.attrib.get("contextRef")
+                if not context_ref or context_ref not in contexts:
+                    continue
+                text = (element.text or "").strip()
+                if not text:
+                    continue
+                facts.append({
+                    "tag": self._local_name(element.tag),
+                    "context_ref": context_ref,
+                    "value": text,
+                    "unit": element.attrib.get("unitRef"),
+                    "decimals": element.attrib.get("decimals"),
+                    "context": contexts[context_ref],
+                })
+            payload = {
+                "symbol": symbol,
+                "fiscal_year": fiscal_year,
+                "source": "NSE Integrated Filing - Financials",
+                "source_url": url,
+                "fetched_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "facts": facts,
+            }
+            target_dir = self.RAW_DATA_DIR / symbol
+            target_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", fiscal_year)
+            (target_dir / f"{safe_name}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except (ET.ParseError, OSError, TypeError, ValueError):
+            return
+
+    @staticmethod
+    def _nse_xbrl_rows(symbol: str) -> list[tuple[str, bytes]]:
+        provider = StructuredFinancialProvider()
+        return [(url, xml_content) for url, xml_content, _ in provider._nse_xbrl_records(symbol)]
 
     @staticmethod
     def _reliable_records(records: list[AnnualFinancials]) -> list[AnnualFinancials]:
@@ -188,17 +338,14 @@ class StructuredFinancialProvider:
                     instant_date = child.text
                 elif local in {"explicitmember", "typedmember"}:
                     has_dimensions = True
-
             start = self._xbrl_date(start_date)
             end = self._xbrl_date(end_date)
             instant = self._xbrl_date(instant_date)
             context_lower = context_id.lower()
             legacy_annual_context = context_lower.startswith("four") and context_lower.endswith("d")
-
             fiscal_year = fiscal_year_override if fiscal_year_override and legacy_annual_context else None
             context_type = "duration" if legacy_annual_context else "instant"
             annual_context = legacy_annual_context
-
             if start is not None:
                 context_type = "duration"
                 days = (end - start).days if end is not None else 0
@@ -208,7 +355,6 @@ class StructuredFinancialProvider:
                 fiscal_year = f"FY{end.year}"
             elif instant is not None:
                 fiscal_year = fiscal_year_override if fiscal_year_override else (f"FY{instant.year}" if instant.month == 3 and instant.day == 31 else None)
-
             if legacy_annual_context and fiscal_year_override:
                 fiscal_year = fiscal_year_override
                 context_type = "duration"
@@ -216,7 +362,6 @@ class StructuredFinancialProvider:
             elif legacy_annual_context and fiscal_year is not None:
                 context_type = "duration"
                 annual_context = True
-
             if fiscal_year:
                 contexts[context_id] = {"type": context_type, "fiscal_year": fiscal_year, "has_dimensions": has_dimensions, "annual_context": annual_context}
 
@@ -308,7 +453,8 @@ class StructuredFinancialProvider:
 
     def _nse_history(self, symbol: str) -> CompanyFinancialHistory:
         records: list[AnnualFinancials] = []
-        for _, xml_content, fiscal_year in self._nse_xbrl_records(symbol):
+        for url, xml_content, fiscal_year in self._nse_xbrl_records(symbol):
+            self._store_raw_xbrl(symbol, url, xml_content, fiscal_year)
             try:
                 records.append(self._parse_nse_xbrl(xml_content, symbol, fiscal_year_override=fiscal_year))
             except (ET.ParseError, FinancialDataError, ValueError):
