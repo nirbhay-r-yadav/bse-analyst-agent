@@ -10,6 +10,7 @@ import argparse
 import csv
 import os
 import sys
+import webbrowser
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
@@ -79,7 +80,7 @@ def _show_result(result: Dict[str, Any]) -> None:
 
 
 def _generate_all_reports(output_dir: str) -> None:
-    """Generate every user-facing report from persisted stage JSON artifacts."""
+    """Generate reports in sequence and open the visual report only at the end."""
     try:
         governance_report = generate_governance_text_report(output_dir)
         print(f"[+] Corporate governance report: {governance_report}")
@@ -98,11 +99,11 @@ def _generate_all_reports(output_dir: str) -> None:
     except Exception as exc:
         print(f"[!] Text report generation failed: {type(exc).__name__}: {exc}")
 
+    # LAST STEP: build the final HTML dashboard, atomically replace the old
+    # version, then open it in the default browser. No report is opened before
+    # all upstream report-generation steps have completed.
     try:
-        # Write the dashboard to a temporary file first, then atomically replace
-        # the existing dashboard. This prevents a stale/partial HTML artifact
-        # when the process is interrupted during report generation.
-        final_html = os.path.join(output_dir, "investment_report.html")
+        final_html = os.path.abspath(os.path.join(output_dir, "investment_report.html"))
         temp_html = final_html + ".tmp"
         if os.path.exists(temp_html):
             os.remove(temp_html)
@@ -110,8 +111,10 @@ def _generate_all_reports(output_dir: str) -> None:
         os.replace(visual_report, final_html)
         size = os.path.getsize(final_html)
         print(f"[+] Visual investment report: {final_html} ({size:,} bytes)")
+        print("[+] Opening investment report in the default browser...")
+        webbrowser.open_new_tab(f"file:///{final_html.replace(os.sep, '/')}")
     except Exception as exc:
-        print(f"[!] Visual investment report generation failed: {type(exc).__name__}: {exc}")
+        print(f"[!] Visual investment report generation/open failed: {type(exc).__name__}: {exc}")
 
 
 def run_single_stock(symbol: str, live_filings: bool = True) -> Dict[str, Any]:
