@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 
 from src.deep_scanner import DeepScannerEngine
+from src.governance_report import generate_governance_text_report
 from src.nse_universe import NSEUniverse
 from src.report_generator import generate_investment_report, generate_investment_text_report
 from src.smallcap_scanner import SmallMicrocapConfig, classify_market_cap
@@ -123,6 +124,11 @@ def run_single_stock(symbol: str, live_filings: bool = True) -> Dict[str, Any]:
 
     if result.get("status") == "ANALYZED":
         output_dir = os.path.join(OUTPUT_DIR, symbol)
+        try:
+            governance_report = generate_governance_text_report(output_dir)
+            print(f"[+] Corporate governance report: {governance_report}")
+        except Exception as exc:
+            print(f"[!] Corporate governance report generation failed: {type(exc).__name__}: {exc}")
         try:
             text_report = generate_investment_text_report(output_dir)
             print(f"[+] Text investment report: {text_report}")
