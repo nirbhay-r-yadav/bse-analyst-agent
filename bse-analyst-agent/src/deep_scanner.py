@@ -102,25 +102,29 @@ class DeepScannerEngine:
                     sections.get("auditor_report", ""),
                     sections.get("notes", ""),
                 )
-                audits.append(
-                    {
-                        "fiscal_year": fiscal_year,
-                        "audit_opinion_type": forensic.audit_opinion_type,
-                        "contingent_liability_risk": forensic.contingent_liability_risk,
-                        "related_party_risk": forensic.related_party_risk,
-                        "forensic_red_flags": forensic.forensic_red_flags,
-                    }
-                )
+                audit = forensic.model_dump()
+                audit["fiscal_year"] = fiscal_year
+                audits.append(audit)
             except Exception as exc:
                 audits.append(
                     {
                         "fiscal_year": fiscal_year,
                         "audit_opinion_type": "Unavailable",
+                        "auditor_observations": [],
+                        "key_audit_matters": [],
+                        "related_party_transactions": [],
+                        "loans_guarantees_investments": [],
+                        "contingent_liabilities": [],
+                        "remuneration_details": [],
+                        "regulatory_compliance_events": [],
+                        "what_happened": [],
                         "contingent_liability_risk": "Unavailable",
                         "related_party_risk": "Unavailable",
                         "forensic_red_flags": [
                             f"Annual-report audit failed: {type(exc).__name__}: {exc}"
                         ],
+                        "why_it_matters": [],
+                        "governance_conclusion": "Unavailable",
                     }
                 )
 
@@ -156,10 +160,19 @@ class DeepScannerEngine:
         latest = audits[0]
         return ForensicAuditOutput(
             audit_opinion_type=str(latest.get("audit_opinion_type") or "Unavailable"),
-            key_audit_matters=[],
+            key_audit_matters=list(latest.get("key_audit_matters") or []),
+            related_party_transactions=list(latest.get("related_party_transactions") or []),
+            loans_guarantees_investments=list(latest.get("loans_guarantees_investments") or []),
+            contingent_liabilities=list(latest.get("contingent_liabilities") or []),
+            remuneration_details=list(latest.get("remuneration_details") or []),
+            regulatory_compliance_events=list(latest.get("regulatory_compliance_events") or []),
+            what_happened=list(latest.get("what_happened") or []),
+            auditor_observations=list(latest.get("auditor_observations") or []),
             contingent_liability_risk=str(latest.get("contingent_liability_risk") or "Unavailable"),
             related_party_risk=str(latest.get("related_party_risk") or "Unavailable"),
             forensic_red_flags=list(latest.get("forensic_red_flags") or []),
+            why_it_matters=list(latest.get("why_it_matters") or []),
+            governance_conclusion=str(latest.get("governance_conclusion") or "Unavailable"),
         )
 
     def analyze_candidate(
