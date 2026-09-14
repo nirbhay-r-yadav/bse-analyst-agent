@@ -44,15 +44,6 @@ def _fmt(value: Any, default: str = "N/A") -> str:
     return str(value)
 
 
-def _fmt_pct(value: Any) -> str:
-    if value is None or value == "":
-        return "N/A"
-    try:
-        return f"{float(value):.2f}%"
-    except (TypeError, ValueError):
-        return str(value)
-
-
 def _list_text(values: Any, empty: str = "None") -> list[str]:
     if not isinstance(values, list):
         return [empty]
@@ -75,19 +66,36 @@ def load_report_data(output_dir: str | Path) -> dict[str, Any]:
     governance = _load_json(governance_file)
     financial = _load_json(financial_file)
     decision = _load_json(decision_file)
-
     symbol = (
         decision.get("symbol")
         or financial.get("symbol")
         or governance.get("symbol")
         or directory.name
     )
-
     return {
         "symbol": symbol,
         "governance": governance,
         "financial": financial,
         "decision": decision,
+    }
+
+
+def _report_values(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the report sections without calculating new investment metrics."""
+    governance = data["governance"]
+    financial = data["financial"]
+    decision = data["decision"]
+    return {
+        "governance": governance,
+        "financial": financial,
+        "decision": decision,
+        "valuation": financial.get("valuation") or {},
+        "ratios": financial.get("ratios") or {},
+        "components": financial.get("financial_components") or {},
+        "history": financial.get("history") or [],
+        "ai": decision.get("ai") or {},
+        "decision_components": decision.get("decision_components") or {},
+        "verdict": decision.get("verdict") or "N/A",
     }
 
 
@@ -102,21 +110,19 @@ def generate_investment_text_report(
     governance = data["governance"]
     financial = data["financial"]
     decision = data["decision"]
+    values = _report_values(data)
 
     if not governance and not financial and not decision:
-        raise FileNotFoundError(
-            f"No unified pipeline artifacts found in: {directory}"
-        )
-
+        raise FileNotFoundError(f"No unified pipeline artifacts found in: {directory}")
     if output_file is None:
         output_file = str(directory / "investment_decision.txt")
 
-    valuation = financial.get("valuation") or {}
-    ratios = financial.get("ratios") or {}
-    components = financial.get("financial_components") or {}
-    history = financial.get("history") or []
-    ai = decision.get("ai") or {}
-    decision_components = decision.get("decision_components") or {}
+    valuation = values["valuation"]
+    ratios = values["ratios"]
+    components = values["components"]
+    history = values["history"]
+    ai = values["ai"]
+    decision_components = values["decision_components"]
 
     lines: list[str] = [
         "NSE EQUITY INVESTMENT REPORT",
@@ -148,78 +154,43 @@ def generate_investment_text_report(
     lines.append("Data Gaps:")
     lines.extend(f"- {item}" for item in _list_text(governance.get("data_gaps")))
 
-    lines.extend([
-        "",
-        SECTION_LINE,
-        "FINANCIAL ANALYSIS",
-        SECTION_LINE,
-        f"Financial Score: {_fmt(financial.get('financial_score'))}",
-    ])
+    lines.extend(["", SECTION_LINE, "FINANCIAL ANALYSIS", SECTION_LINE,
+                  f"Financial Score: {_fmt(financial.get('financial_score'))}"])
     for name, value in components.items():
         lines.append(f"{name}: {_fmt(value)}")
 
-    lines.extend([
-        "",
-        SECTION_LINE,
-        "FINANCIAL RATIOS",
-        SECTION_LINE,
-    ])
+    lines.extend(["", SECTION_LINE, "FINANCIAL RATIOS", SECTION_LINE])
     for name, value in ratios.items():
         lines.append(f"{name}: {_fmt(value)}")
 
-    lines.extend([
-        "",
-        SECTION_LINE,
-        "FINANCIAL HISTORY USED",
-        SECTION_LINE,
-        "Fiscal Year  Revenue  EBIT  PAT",
-        "----------  -------  ----  ---",
-    ])
+    lines.extend(["", SECTION_LINE, "FINANCIAL HISTORY USED", SECTION_LINE,
+                  "Fiscal Year  Revenue  EBIT  PAT", "----------  -------  ----  ---"])
     for year in history:
         lines.append(
             f"{_fmt(year.get('fiscal_year'), year.get('year', 'N/A'))}  "
-            f"{_fmt(year.get('revenue'))}  "
-            f"{_fmt(year.get('ebit'))}  "
-            f"{_fmt(year.get('pat'))}"
+            f"{_fmt(year.get('revenue'))}  {_fmt(year.get('ebit'))}  {_fmt(year.get('pat'))}"
         )
     if not history:
         lines.append("No structured financial history available.")
 
-    lines.extend([
-        "",
-        SECTION_LINE,
-        "VALUATION",
-        SECTION_LINE,
-        f"Available: {_fmt(valuation.get('available'), 'False')}",
-        f"Fair Value: {_fmt(valuation.get('fair_value'))}",
-        f"Buy Below: {_fmt(valuation.get('buy_below'))}",
-        f"Reason: {_fmt(valuation.get('reason'))}",
-        f"Decision Score: {_fmt(decision_components.get('valuation'))}",
-        f"Decision State: {_fmt(decision.get('valuation_state'))}",
-        "",
-        SECTION_LINE,
-        "FINAL INVESTMENT DECISION",
-        SECTION_LINE,
-        f"VERDICT: {_fmt(decision.get('verdict'))}",
-        f"DECISION SCORE: {_fmt(decision.get('decision_score'))}",
-        f"REASON",
-        _fmt(decision.get("reason"), "No decision reason available."),
-        "",
-        SECTION_LINE,
-        "AI INVESTMENT THESIS",
-        SECTION_LINE,
-        f"Conviction Score: {_fmt(ai.get('conviction_score'))}",
-        "Executive Summary:",
-        _fmt(ai.get("thesis"), "No qualitative thesis available."),
-        "",
-    ])
+    lines.extend(["", SECTION_LINE, "VALUATION", SECTION_LINE,
+                  f"Available: {_fmt(valuation.get('available'), 'False')}",
+                  f"Fair Value: {_fmt(valuation.get('fair_value'))}",
+                  f"Buy Below: {_fmt(valuation.get('buy_below'))}",
+                  f"Reason: {_fmt(valuation.get('reason'))}",
+                  f"Decision Score: {_fmt(decision_components.get('valuation'))}",
+                  f"Decision State: {_fmt(decision.get('valuation_state'))}"])
+
+    lines.extend(["", SECTION_LINE, "FINAL INVESTMENT DECISION", SECTION_LINE,
+                  f"VERDICT: {_fmt(decision.get('verdict'))}",
+                  f"DECISION SCORE: {_fmt(decision.get('decision_score'))}",
+                  "REASON", _fmt(decision.get("reason"), "No decision reason available."),
+                  "", SECTION_LINE, "AI INVESTMENT THESIS", SECTION_LINE,
+                  f"Conviction Score: {_fmt(ai.get('conviction_score'))}",
+                  "Executive Summary:", _fmt(ai.get("thesis"), "No qualitative thesis available."), ""])
 
     annual_audits = governance.get("annual_report_audits") or []
-    lines.extend([
-        SECTION_LINE,
-        "ANNUAL REPORT FORENSIC FINDINGS",
-        SECTION_LINE,
-    ])
+    lines.extend([SECTION_LINE, "ANNUAL REPORT FORENSIC FINDINGS", SECTION_LINE])
     if annual_audits:
         for audit in annual_audits:
             lines.extend([
@@ -229,10 +200,7 @@ def generate_investment_text_report(
                 f"Related Party Risk: {_fmt(audit.get('related_party_risk'))}",
                 "Forensic Red Flags:",
             ])
-            lines.extend(
-                f"- {item}"
-                for item in _list_text(audit.get("forensic_red_flags"))
-            )
+            lines.extend(f"- {item}" for item in _list_text(audit.get("forensic_red_flags")))
             lines.append("")
     else:
         lines.append("No annual report forensic audit data available.")
@@ -256,50 +224,59 @@ def _score_class(value: Any) -> str:
 
 def _verdict_class(verdict: Any) -> str:
     value = str(verdict or "").upper()
-    if value == "BUY":
-        return "buy"
-    if value == "WATCHLIST":
-        return "watchlist"
-    if value == "AVOID":
-        return "avoid"
-    return "neutral"
+    return {"BUY": "buy", "WATCHLIST": "watchlist", "AVOID": "avoid"}.get(value, "neutral")
+
+
+def _risk_class(value: Any) -> str:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "neutral"
+    if score <= 3:
+        return "positive"
+    if score <= 6:
+        return "warning"
+    return "negative"
 
 
 def _list_html(values: Any, empty: str) -> str:
-    items = _list_text(values, empty)
-    return "".join(f'<li>{_escape(item)}</li>' for item in items)
+    return "".join(f'<li>{_escape(item)}</li>' for item in _list_text(values, empty))
+
+
+def _kv_rows(values: dict[str, Any]) -> str:
+    return "".join(
+        f'<div class="kv"><span>{_escape(name)}</span><strong>{_escape(_fmt(value))}</strong></div>'
+        for name, value in values.items()
+    )
 
 
 def generate_investment_report(
     report_source: str,
     output_file: str | None = None,
 ) -> str:
-    """Generate HTML directly from the unified pipeline JSON artifacts.
+    """Generate the HTML dashboard directly from unified stage JSON artifacts.
 
-    ``report_source`` should normally be ``outputs/<SYMBOL>``. For backward
-    compatibility, passing ``investment_decision.txt`` resolves its parent
-    directory; the text file itself is never parsed for financial values.
+    Passing ``investment_decision.txt`` remains supported for compatibility;
+    the text report is never parsed for financial values.
     """
     source = Path(report_source)
     output_dir = source if source.is_dir() else source.parent
     data = load_report_data(output_dir)
-
     if not any(data[key] for key in ("governance", "financial", "decision")):
-        raise FileNotFoundError(
-            f"No unified pipeline artifacts found in: {output_dir}"
-        )
+        raise FileNotFoundError(f"No unified pipeline artifacts found in: {output_dir}")
 
     symbol = str(data["symbol"])
     governance = data["governance"]
     financial = data["financial"]
     decision = data["decision"]
-    valuation = financial.get("valuation") or {}
-    ratios = financial.get("ratios") or {}
-    components = financial.get("financial_components") or {}
-    history = financial.get("history") or []
-    ai = decision.get("ai") or {}
-    decision_components = decision.get("decision_components") or {}
-    verdict = decision.get("verdict") or "N/A"
+    values = _report_values(data)
+    valuation = values["valuation"]
+    ratios = values["ratios"]
+    components = values["components"]
+    history = values["history"]
+    ai = values["ai"]
+    decision_components = values["decision_components"]
+    verdict = values["verdict"]
 
     if output_file is None:
         output_file = str(output_dir / "investment_report.html")
@@ -315,6 +292,13 @@ def generate_investment_report(
         f'<div class="score-value {_score_class(value)}">{_escape(_fmt(value))}</div></div>'
         for name, value in score_items
     )
+
+    overview_cards = "".join([
+        f'<div class="metric"><span>Fair value</span><strong>{_escape(_fmt(valuation.get("fair_value")))}</strong></div>',
+        f'<div class="metric"><span>Buy below</span><strong>{_escape(_fmt(valuation.get("buy_below")))}</strong></div>',
+        f'<div class="metric"><span>Reports scanned</span><strong>{_escape(_fmt(governance.get("reports_scanned"), "0"))}</strong></div>',
+        f'<div class="metric"><span>Conviction</span><strong>{_escape(_fmt(ai.get("conviction_score")))}</strong></div>',
+    ])
 
     history_rows = "".join(
         "<tr>"
@@ -339,14 +323,15 @@ def generate_investment_report(
     audits_html = ""
     for audit in governance.get("annual_report_audits") or []:
         audits_html += f"""
-        <div class="audit-card">
-          <h3>{_escape(audit.get('fiscal_year', 'Unknown'))}</h3>
-          <p><b>Audit opinion:</b> {_escape(audit.get('audit_opinion_type', 'N/A'))}</p>
-          <p><b>Contingent liability risk:</b> {_escape(audit.get('contingent_liability_risk', 'N/A'))}</p>
-          <p><b>Related-party risk:</b> {_escape(audit.get('related_party_risk', 'N/A'))}</p>
-          <b>Forensic red flags</b>
-          <ul>{_list_html(audit.get('forensic_red_flags'), 'None')}</ul>
-        </div>
+        <details class="audit-card">
+          <summary><strong>{_escape(audit.get('fiscal_year', 'Unknown'))}</strong><span>{_escape(audit.get('audit_opinion_type', 'N/A'))}</span></summary>
+          <div class="audit-body">
+            <p><b>Contingent liability risk:</b> {_escape(audit.get('contingent_liability_risk', 'N/A'))}</p>
+            <p><b>Related-party risk:</b> {_escape(audit.get('related_party_risk', 'N/A'))}</p>
+            <b>Forensic red flags</b>
+            <ul>{_list_html(audit.get('forensic_red_flags'), 'None')}</ul>
+          </div>
+        </details>
         """
     audits_html = audits_html or '<div class="empty">No annual report forensic audit data available.</div>'
 
@@ -358,35 +343,43 @@ def generate_investment_report(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_escape(symbol)} Investment Report</title>
 <style>
-*{{box-sizing:border-box}} body{{margin:0;background:#0b1020;color:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.5}} .container{{max-width:1200px;margin:auto;padding:36px 22px 60px}} .header{{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}} .brand{{color:#94a3b8;text-transform:uppercase;letter-spacing:3px;font-size:13px}} h1{{font-size:42px;margin:8px 0}} h2{{margin-top:34px;border-bottom:1px solid #334155;padding-bottom:8px}} .subtitle{{color:#94a3b8}} .verdict{{padding:22px 30px;border-radius:16px;text-align:center;border:1px solid #334155;font-size:28px;font-weight:800}} .verdict.buy{{background:#12351f}} .verdict.watchlist{{background:#3b3010}} .verdict.avoid{{background:#3b1717}} .verdict.neutral{{background:#1e293b}} .score-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:28px 0}} .score-card,.component,.audit-card,.panel{{background:#111827;border:1px solid #263244;border-radius:14px;padding:18px}} .score-label{{color:#94a3b8;font-size:13px}} .score-value{{font-size:27px;font-weight:800;margin-top:5px}} .positive{{color:#86efac}} .warning{{color:#fde68a}} .negative{{color:#fca5a5}} .neutral{{color:#cbd5e1}} .component-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}} .component{{display:flex;justify-content:space-between;gap:16px}} table{{width:100%;border-collapse:collapse;background:#111827;border-radius:14px;overflow:hidden}} th,td{{padding:11px 13px;border-bottom:1px solid #263244;text-align:left}} th{{color:#94a3b8}} .two{{display:grid;grid-template-columns:1fr 1fr;gap:18px}} ul{{padding-left:22px}} .empty{{color:#94a3b8;padding:8px 0}} .thesis{{white-space:pre-wrap;background:#111827;border:1px solid #263244;border-radius:14px;padding:20px}} @media(max-width:800px){{.header,.two{{display:block}} .verdict{{margin-top:20px}} .score-grid{{grid-template-columns:1fr 1fr}} .component-grid{{grid-template-columns:1fr}}}}
+*{{box-sizing:border-box}} body{{margin:0;background:#0b1020;color:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.55}} .container{{max-width:1240px;margin:auto;padding:34px 22px 64px}} .header{{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}} .brand{{color:#94a3b8;text-transform:uppercase;letter-spacing:3px;font-size:12px}} h1{{font-size:44px;line-height:1.1;margin:8px 0}} h2{{margin:38px 0 14px;border-bottom:1px solid #334155;padding-bottom:9px;font-size:23px}} .subtitle{{color:#94a3b8}} .verdict{{min-width:170px;padding:18px 28px;border-radius:16px;text-align:center;border:1px solid #334155;font-size:27px;font-weight:800}} .verdict.buy{{background:#12351f}} .verdict.watchlist{{background:#3b3010}} .verdict.avoid{{background:#3b1717}} .verdict.neutral{{background:#1e293b}} .score-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 16px}} .score-card,.metric,.component,.audit-card,.panel{{background:#111827;border:1px solid #263244;border-radius:14px;padding:17px}} .score-label,.metric span,.kv span{{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.7px}} .score-value{{font-size:28px;font-weight:800;margin-top:5px}} .positive{{color:#86efac}} .warning{{color:#fde68a}} .negative{{color:#fca5a5}} .neutral{{color:#cbd5e1}} .overview{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}} .metric strong{{display:block;font-size:20px;margin-top:5px}} .two{{display:grid;grid-template-columns:1fr 1fr;gap:18px}} .component-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}} .component{{display:flex;justify-content:space-between;gap:16px}} .kv-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 22px}} .kv{{display:flex;justify-content:space-between;border-bottom:1px solid #263244;padding:8px 0;gap:12px}} .panel h3{{margin-top:0}} table{{width:100%;border-collapse:collapse;background:#111827;border-radius:14px;overflow:hidden}} th,td{{padding:11px 13px;border-bottom:1px solid #263244;text-align:left}} th{{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.6px}} .thesis{{white-space:pre-wrap;background:#111827;border:1px solid #263244;border-radius:14px;padding:20px;font-size:16px}} .audit-card{{margin-bottom:10px}} .audit-card summary{{cursor:pointer;display:flex;justify-content:space-between;gap:16px}} .audit-card summary span{{color:#94a3b8}} .audit-body{{padding-top:10px}} ul{{padding-left:22px}} .empty{{color:#94a3b8;padding:8px 0}} .hard-fail{{font-weight:800}} .muted{{color:#94a3b8}} @media print{{body{{background:#fff;color:#111827}} .score-card,.metric,.component,.audit-card,.panel,.thesis,table{{background:#fff;border-color:#d1d5db}} .positive,.warning,.negative,.neutral{{color:#111827}}}} @media(max-width:800px){{.header,.two{{display:block}} .verdict{{margin-top:20px}} .score-grid,.overview,.component-grid{{grid-template-columns:1fr 1fr}} .kv-grid{{grid-template-columns:1fr}}}} @media(max-width:520px){{.score-grid,.overview,.component-grid{{grid-template-columns:1fr}} h1{{font-size:36px}}}}
 </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <div><div class="brand">NSE Equity Research Agent</div><h1>{_escape(symbol)}</h1><div class="subtitle">Generated from unified pipeline stage artifacts</div></div>
+    <div><div class="brand">NSE Equity Research Agent</div><h1>{_escape(symbol)}</h1><div class="subtitle">Unified pipeline report · Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div></div>
     <div class="verdict {verdict_css}">{_escape(verdict)}</div>
   </div>
 
   <div class="score-grid">{score_cards}</div>
+  <div class="overview">{overview_cards}</div>
 
   <h2>Final Investment Decision</h2>
   <div class="panel">
-    <p><b>Decision score:</b> {_escape(_fmt(decision.get('decision_score')))}</p>
+    <div class="kv-grid">{_kv_rows({
+        "Decision score": decision.get("decision_score"),
+        "Fundamental score": decision_components.get("fundamental_quality", financial.get("financial_score")),
+        "Governance score": decision_components.get("governance"),
+        "Valuation score": decision_components.get("valuation"),
+        "Valuation state": decision.get("valuation_state"),
+        "Hard fail": governance.get("hard_fail"),
+    })}</div>
     <p><b>Reason:</b> {_escape(_fmt(decision.get('reason'), 'No decision reason available.'))}</p>
-    <p><b>Valuation score:</b> {_escape(_fmt(decision_components.get('valuation')))}</p>
-    <p><b>Valuation state:</b> {_escape(_fmt(decision.get('valuation_state')))}</p>
   </div>
 
   <h2>Corporate Governance</h2>
   <div class="two">
     <div class="panel">
-      <p><b>Grade:</b> {_escape(_fmt(governance.get('governance_grade')))}</p>
-      <p><b>Decision governance score:</b> {_escape(_fmt(decision_components.get('governance')))}</p>
-      <p><b>Risk score:</b> {_escape(_fmt(governance.get('risk_score')))}</p>
-      <p><b>Annual-report score:</b> {_escape(_fmt(governance.get('annual_report_score')))}</p>
-      <p><b>Reports scanned:</b> {_escape(_fmt(governance.get('reports_scanned'), '0'))}</p>
-      <p><b>Hard fail:</b> {_escape(_fmt(governance.get('hard_fail'), 'False'))}</p>
+      <div class="kv-grid">{_kv_rows({
+          "Grade": governance.get("governance_grade"),
+          "Risk score": governance.get("risk_score"),
+          "Decision score": decision_components.get("governance"),
+          "Annual-report score": governance.get("annual_report_score"),
+          "Reports scanned": governance.get("reports_scanned"),
+          "Hard fail": governance.get("hard_fail"),
+      })}</div>
     </div>
     <div class="panel"><b>Risk flags</b><ul>{_list_html(governance.get('risk_flags'), 'No governance risk flags recorded.')}</ul></div>
   </div>
@@ -403,19 +396,22 @@ def generate_investment_report(
 
   <h2>Financial History Used</h2>
   <table><thead><tr><th>Fiscal Year</th><th>Revenue</th><th>EBIT</th><th>PAT</th></tr></thead><tbody>{history_rows}</tbody></table>
+  <p class="muted">Only structured history present in the financial stage artifact is displayed; missing years or values are not substituted.</p>
 
   <h2>Valuation</h2>
   <div class="panel">
-    <p><b>Available:</b> {_escape(_fmt(valuation.get('available'), 'False'))}</p>
-    <p><b>Fair value:</b> {_escape(_fmt(valuation.get('fair_value')))}</p>
-    <p><b>Buy below:</b> {_escape(_fmt(valuation.get('buy_below')))}</p>
-    <p><b>Decision score:</b> {_escape(_fmt(decision_components.get('valuation')))}</p>
-    <p><b>Decision state:</b> {_escape(_fmt(decision.get('valuation_state')))}</p>
+    <div class="kv-grid">{_kv_rows({
+        "Available": valuation.get("available"),
+        "Fair value": valuation.get("fair_value"),
+        "Buy below": valuation.get("buy_below"),
+        "Decision score": decision_components.get("valuation"),
+        "Decision state": decision.get("valuation_state"),
+    })}</div>
     <p><b>Reason:</b> {_escape(_fmt(valuation.get('reason')))}</p>
   </div>
 
   <h2>AI Investment Thesis</h2>
-  <div class="thesis"><b>Conviction score:</b> {_escape(_fmt(ai.get('conviction_score')))}\n\n{_escape(_fmt(ai.get('thesis'), 'No qualitative thesis available.'))}</div>
+  <div class="thesis"><b>Conviction score:</b> {_escape(_fmt(ai.get('conviction_score')))}<br><br>{_escape(_fmt(ai.get('thesis'), 'No qualitative thesis available.'))}</div>
 
   <h2>Annual Report Forensic Findings</h2>
   {audits_html}
