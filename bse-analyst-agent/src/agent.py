@@ -22,11 +22,22 @@ warnings.filterwarnings("ignore", message=r".*automatic function calling \(AFC\)
 
 
 class ForensicAuditOutput(BaseModel):
+    """Structured, year-specific governance evidence extracted from one annual report."""
+
     audit_opinion_type: str = Field(description="Unmodified/Clean, Qualified, Adverse, or Disclaimer")
-    key_audit_matters: List[str] = Field(description="Material KAMs and accounting judgement areas")
-    contingent_liability_risk: str = Field(description="Low, Medium, or High with reasoning")
-    related_party_risk: str = Field(description="Low, Medium, or High with reasoning")
-    forensic_red_flags: List[str] = Field(description="Specific accounting, audit, or governance red flags")
+    auditor_observations: List[str] = Field(description="Material auditor, CARO, internal-control, EOM, or KAM observations actually stated in the report")
+    key_audit_matters: List[str] = Field(description="Material KAMs and accounting judgement areas actually disclosed")
+    related_party_transactions: List[str] = Field(description="Actual related-party transactions, counterparties, amounts, percentages, balances, and nature disclosed in the notes; empty only when none/materially none are identified")
+    loans_guarantees_investments: List[str] = Field(description="Actual loans, guarantees, investments, advances, or other funding to subsidiaries/promoter/group entities, including amounts and outstanding balances where disclosed")
+    contingent_liabilities: List[str] = Field(description="Actual contingent liabilities, disputed claims, guarantees, tax/legal exposures, amounts, and nature disclosed")
+    remuneration_details: List[str] = Field(description="Actual promoter/director/KMP/relative remuneration, commission, or benefits disclosed, including amounts where available")
+    regulatory_compliance_events: List[str] = Field(description="Actual regulatory, statutory, compliance, delay, penalty, SEBI/exchange, tax, PF/GST, whistleblower, or other governance events disclosed")
+    what_happened: List[str] = Field(description="Concise factual year-level events that actually happened according to the supplied annual report; preserve amounts, percentages, counterparties, and dates when available")
+    contingent_liability_risk: str = Field(description="Low, Medium, or High with concise evidence-based reasoning")
+    related_party_risk: str = Field(description="Low, Medium, or High with concise evidence-based reasoning")
+    forensic_red_flags: List[str] = Field(description="Specific evidence-backed accounting, audit, or governance red flags; do not invent")
+    why_it_matters: List[str] = Field(description="Investor interpretation of the actual disclosed facts, clearly separated from facts")
+    governance_conclusion: str = Field(description="One concise year-level governance conclusion based only on the supplied evidence")
 
 
 class InvestmentMemo(BaseModel):
@@ -59,7 +70,9 @@ class AnalysisOrchestrator:
             ("system", FORENSIC_AUDITOR_SYSTEM),
             (
                 "human",
-                "Perform the forensic governance audit.\n\n"
+                "Perform the forensic governance audit. Return factual, year-specific evidence. "
+                "Do not summarize a fact merely as a risk label when the underlying amount, party, "
+                "percentage, event, or disclosure is present in the supplied text.\n\n"
                 "=== AUDITOR REPORT / CARO ===\n{auditor_text}\n\n"
                 "=== NOTES ===\n{notes_text}",
             ),
