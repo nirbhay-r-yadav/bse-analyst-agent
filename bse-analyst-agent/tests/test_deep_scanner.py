@@ -30,11 +30,20 @@ def test_corporate_reject_happens_before_financial_analysis():
                 "source": "test",
             }
 
+    class FakeDownloader:
+        def download_reports(self, symbol, years=10):
+            return []
+
+    class FakeAI:
+        pass
+
     class ExplodingFinancialProvider:
         def get_history(self, symbol):
             raise AssertionError("Financial provider must not run after hard governance failure")
 
     result = deep_scanner.DeepScannerEngine(
+        downloader=FakeDownloader(),
+        orchestrator=FakeAI(),
         filings_client=FakeFilings(),
         financial_provider=ExplodingFinancialProvider(),
     ).analyze_candidate(
@@ -110,7 +119,14 @@ def test_pipeline_uses_structured_financial_provider_and_deterministic_decision(
 
         def get_history(self, symbol):
             self.called = True
-            return SimpleNamespace(years=[SimpleNamespace(pat=100, model_dump=lambda: {"fiscal_year": "FY2026", "pat": 100})])
+            return SimpleNamespace(
+                years=[
+                    SimpleNamespace(
+                        pat=100,
+                        model_dump=lambda: {"fiscal_year": "FY2026", "pat": 100},
+                    )
+                ]
+            )
 
     class FakeFinancialEngine:
         def calculate_ratios(self, history):
@@ -125,10 +141,23 @@ def test_pipeline_uses_structured_financial_provider_and_deterministic_decision(
             }
 
         def calculate_quality(self, ratios, governance_clean=True):
-            return {"components": {"capital_efficiency": 20, "growth": 20, "balance_sheet": 15, "cash_quality": 15}, "score_100": 70}
+            return {
+                "components": {
+                    "capital_efficiency": 20,
+                    "growth": 20,
+                    "balance_sheet": 15,
+                    "cash_quality": 15,
+                },
+                "score_100": 70,
+            }
 
         def calculate_valuation(self, *args, **kwargs):
-            return {"available": True, "current_price": 100, "fair_value": 150, "buy_below": 105}
+            return {
+                "available": True,
+                "current_price": 100,
+                "fair_value": 150,
+                "buy_below": 105,
+            }
 
     provider = FakeFinancialProvider()
     result = deep_scanner.DeepScannerEngine(
