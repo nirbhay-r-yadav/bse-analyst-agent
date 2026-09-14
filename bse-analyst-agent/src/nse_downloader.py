@@ -1,5 +1,3 @@
-import re
-from pathlib import Path
 """
 src/nse_downloader.py
 Automated downloader for Indian Annual Reports via NSE India API.
@@ -7,10 +5,12 @@ Includes stock-specific local file caching, PDF validation, and multi-year repor
 """
 
 import os
+import re
 import shutil
 import tempfile
 import zipfile
 import requests
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -42,23 +42,25 @@ class NSEDownloader:
         self.session.headers.update(self.HEADERS)
         self._session_initialized = False
 
-    def _stock_dir(self, symbol: str) -> str:
-        """Return and create the stock-specific annual-report directory."""
-        stock_dir = os.path.join(
-            self.download_dir,
-            symbol.upper().strip(),
-        )
-        os.makedirs(stock_dir, exist_ok=True)
-        return stock_dir
-
-    def _init_session(self):
-        """Visit NSE homepage to initialize required cookies."""
+    def _init_session(self) -> bool:
+        """Best-effort NSE homepage session initialization for API retry only."""
         try:
-            resp = self.session.get(self.BASE_HOME, timeout=15)
-            resp.raise_for_status()
+            resp = self.session.get(
+                self.BASE_HOME,
+                headers={"Referer": "https://www.google.com/"},
+                timeout=15,
+            )
+            if resp.status_code >= 400:
+                print(
+                    f"[!] NSE homepage session unavailable: "
+                    f"HTTP {resp.status_code}"
+                )
+                return False
             self._session_initialized = True
+            return True
         except Exception as e:
-            print(f"[!] Warning: Could not initialize NSE session cookies: {e}")
+            print(f"[!] NSE homepage session initialization failed: {e}")
+            return False
 
     @staticmethod
     def _extract_fin_year(record: dict, file_url: str = "") -> str | None:
@@ -87,10 +89,12 @@ class NSEDownloader:
         return None
 
     def get_annual_report_records(self, symbol: str) -> list[dict]:
-        """Return available NSE annual-report records, newest first."""
-        if not self._session_initialized:
-            self._init_session()
+        """Return available NSE annual-report records, newest first.
 
+        The annual-report API is the primary source. NSE's homepage is not a
+        prerequisite because it may return HTTP 403 while the public API still
+        returns valid annual-report data.
+        """
         params = {
             "index": "equities",
             "symbol": symbol.upper().strip(),
@@ -102,6 +106,7 @@ class NSEDownloader:
                 "companies-listing/corporate-filings-annual-reports"
             ),
             "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
         }
 
         try:
@@ -111,15 +116,26 @@ class NSEDownloader:
                 headers=api_headers,
                 timeout=30,
             )
+            content_type = (res.headers.get("Content-Type") or "").lower()
+            print(
+                f"[*] NSE annual-report API: HTTP {res.status_code} | "
+                f"{content_type or 'content-type unavailable'}"
+            )
 
             if res.status_code in (401, 403):
-                self._init_session()
-                res = self.session.get(
-                    self.API_URL,
-                    params=params,
-                    headers=api_headers,
-                    timeout=30,
-                )
+                print("[*] NSE annual-report API requires session retry; initializing homepage session...")
+                if self._init_session():
+                    res = self.session.get(
+                        self.API_URL,
+                        params=params,
+                        headers=api_headers,
+                        timeout=30,
+                    )
+                    content_type = (res.headers.get("Content-Type") or "").lower()
+                    print(
+                        f"[*] NSE annual-report API retry: HTTP {res.status_code} | "
+                        f"{content_type or 'content-type unavailable'}"
+                    )
 
             res.raise_for_status()
 
@@ -147,6 +163,7 @@ class NSEDownloader:
                     else:
                         record["finYear"] = None
 
+            print(f"[*] NSE annual-report API records received: {len(records)}")
             return records
 
         except Exception as e:
@@ -374,7 +391,6 @@ class NSEDownloader:
                 except OSError:
                     pass
 
-            # Preserve/reuse reports from the previous centralized cache.
             legacy_path = os.path.join(self.download_dir, target_filename)
             if (
                 os.path.exists(legacy_path)
@@ -434,7 +450,6 @@ class NSEDownloader:
             except OSError:
                 pass
 
-        # Reuse the old centralized cache when available.
         legacy_path = os.path.join(self.download_dir, target_filename)
         if (
             os.path.exists(legacy_path)
