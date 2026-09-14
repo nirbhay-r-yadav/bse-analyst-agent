@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 
 from src.deep_scanner import DeepScannerEngine
+from src.financial_report import generate_financial_text_report
 from src.governance_report import generate_governance_text_report
 from src.nse_universe import NSEUniverse
 from src.report_generator import generate_investment_report, generate_investment_text_report
@@ -78,20 +79,37 @@ def _show_result(result: Dict[str, Any]) -> None:
 
 
 def _generate_all_reports(output_dir: str) -> None:
-    """Generate every user-facing report from the persisted stage JSON artifacts."""
+    """Generate every user-facing report from persisted stage JSON artifacts."""
     try:
         governance_report = generate_governance_text_report(output_dir)
         print(f"[+] Corporate governance report: {governance_report}")
     except Exception as exc:
         print(f"[!] Corporate governance report generation failed: {type(exc).__name__}: {exc}")
+
+    try:
+        financial_report = generate_financial_text_report(output_dir)
+        print(f"[+] Financial analysis report: {financial_report}")
+    except Exception as exc:
+        print(f"[!] Financial analysis report generation failed: {type(exc).__name__}: {exc}")
+
     try:
         text_report = generate_investment_text_report(output_dir)
         print(f"[+] Text investment report: {text_report}")
     except Exception as exc:
         print(f"[!] Text report generation failed: {type(exc).__name__}: {exc}")
+
     try:
-        visual_report = generate_investment_report(output_dir)
-        print(f"[+] Visual investment report: {visual_report}")
+        # Write the dashboard to a temporary file first, then atomically replace
+        # the existing dashboard. This prevents a stale/partial HTML artifact
+        # when the process is interrupted during report generation.
+        final_html = os.path.join(output_dir, "investment_report.html")
+        temp_html = final_html + ".tmp"
+        if os.path.exists(temp_html):
+            os.remove(temp_html)
+        visual_report = generate_investment_report(output_dir, output_file=temp_html)
+        os.replace(visual_report, final_html)
+        size = os.path.getsize(final_html)
+        print(f"[+] Visual investment report: {final_html} ({size:,} bytes)")
     except Exception as exc:
         print(f"[!] Visual investment report generation failed: {type(exc).__name__}: {exc}")
 
