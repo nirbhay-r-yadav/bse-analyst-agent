@@ -109,8 +109,35 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
 
     valid_revenue = valid_history([year.revenue for year in years])
     valid_pat = valid_history([year.pat for year in years])
-    revenue_cagr = _cagr(valid_revenue[-1], valid_revenue[0], len(valid_revenue) - 1) if len(valid_revenue) >= MIN_YEARS_CAGR else None
-    pat_cagr = _cagr(valid_pat[-1], valid_pat[0], len(valid_pat) - 1) if len(valid_pat) >= MIN_YEARS_CAGR else None
+
+    revenue_cagr = (
+        _cagr(valid_revenue[-1], valid_revenue[0], len(valid_revenue) - 1)
+        if len(valid_revenue) >= MIN_YEARS_CAGR
+        else None
+    )
+
+    # Conventional CAGR is not meaningful when PAT crosses zero or contains
+    # loss years. Preserve the full PAT history rather than silently presenting
+    # a CAGR that can misrepresent profitability.
+    pat_has_loss_year = any(value <= 0 for value in valid_pat)
+
+    if len(valid_pat) >= MIN_YEARS_CAGR and not pat_has_loss_year:
+        pat_cagr = _cagr(
+            valid_pat[-1],
+            valid_pat[0],
+            len(valid_pat) - 1,
+        )
+        pat_cagr_status = "VALID"
+    else:
+        pat_cagr = None
+        pat_cagr_status = (
+            "NOT_MEANINGFUL_DUE_TO_LOSS_YEARS"
+            if pat_has_loss_year
+            else "INSUFFICIENT_HISTORY"
+        )
+
+    pat_profitable_years = sum(1 for value in valid_pat if value > 0)
+    pat_loss_years = sum(1 for value in valid_pat if value <= 0)
 
     def period_cagr(field: str, period: int) -> float | None:
         if period <= 1:
@@ -183,6 +210,9 @@ def calculate_fundamental_ratios(data: CompanyFinancialHistory) -> Dict[str, Any
         "PAT YoY Growth (%)": round(pat_growth_yoy, 2) if pat_growth_yoy is not None else None,
         "Revenue CAGR (%)": round(revenue_cagr, 2) if revenue_cagr is not None else None,
         "PAT CAGR (%)": round(pat_cagr, 2) if pat_cagr is not None else None,
+        "PAT CAGR Status": pat_cagr_status,
+        "PAT Profitable Years": f"{pat_profitable_years}/{len(valid_pat)}" if valid_pat else "0/0",
+        "PAT Loss Years": pat_loss_years,
         "Revenue CAGR 3Y (%)": round(revenue_cagr_3y, 2) if revenue_cagr_3y is not None else None,
         "Revenue CAGR 5Y (%)": round(revenue_cagr_5y, 2) if revenue_cagr_5y is not None else None,
         "Revenue CAGR 10Y (%)": round(revenue_cagr_10y, 2) if revenue_cagr_10y is not None else None,
