@@ -27,7 +27,7 @@ class ScoreBreakdown:
     score: float
     maximum: float
     normalized_100: float
-    components: dict[str, float]
+    components: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -127,9 +127,7 @@ class ScoringEngine:
                 return None
             return ScoreBreakdown("business", float(score), 100.0, self._normalise(float(score), 100.0), {})
         components = {str(k): float(v or 0) for k, v in components_raw.items()}
-        maximum = float(payload.get("score_maximum") or sum(
-            max(0.0, value) for value in components.values()
-        ) or 100.0)
+        maximum = float(payload.get("score_maximum") or sum(max(0.0, value) for value in components.values()) or 100.0)
         score = float(payload.get("business_score") if payload.get("business_score") is not None else sum(components.values()))
         return ScoreBreakdown("business", score, maximum, self._normalise(score, maximum), components)
 
@@ -180,11 +178,7 @@ class ScoringEngine:
             "governance": governance.score,
         }
         decision = round(sum(decision_components.values()), 2)
-        symbol = str(
-            governance_json.get("symbol")
-            or financial_json.get("symbol")
-            or business_json.get("symbol") if business_json else ""
-        )
+        symbol = str(governance_json.get("symbol") or financial_json.get("symbol") or "")
         return ScoringResult(
             symbol=symbol,
             governance=governance,
@@ -209,9 +203,9 @@ class ScoringEngine:
             "decision_matches_recalculation": persisted_decision is not None and float(persisted_decision) == result.decision,
             "fundamentals_matches_recalculation": persisted_fundamentals is not None and float(persisted_fundamentals) == result.fundamentals.score,
             "governance_grade_matches": persisted_governance is not None and str(persisted_governance).upper() == result.governance.components["grade_label"],
-            "decision_in_0_100": 0 <= result.decision <= 100,
-            "governance_raw_is_0_100": 0 <= result.governance.score <= 100,
-            "fundamentals_raw_is_0_100": 0 <= result.fundamentals.score <= 100,
+            "decision_is_0_to_100": 0 <= result.decision <= 100,
+            "governance_uses_100_point_scale": result.governance.maximum == 100,
+            "fundamentals_uses_100_point_scale": result.fundamentals.maximum == 100,
         }
         return {
             "status": "PASS" if all(checks.values()) else "FAIL",
