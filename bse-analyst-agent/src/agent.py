@@ -1,7 +1,10 @@
 """
 src/agent.py
-Autonomous financial analysis agent using Google Gemini.
-Gemini extracts and interprets evidence; Python owns numeric calculations and final verdict.
+Qualitative Gemini orchestration for the unified research pipeline.
+
+Gemini interprets governance evidence and writes the investment thesis.
+Python owns financial extraction, numeric calculations, validation, valuation,
+and the final deterministic verdict.
 """
 
 import os
@@ -12,9 +15,7 @@ from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from src.financial_tools import CompanyFinancialHistory
-from src.prompts import FORENSIC_AUDITOR_SYSTEM, FINANCIAL_EXTRACTION_SYSTEM, INVESTMENT_COMMITTEE_SYSTEM
-
+from src.prompts import FORENSIC_AUDITOR_SYSTEM, INVESTMENT_COMMITTEE_SYSTEM
 
 warnings.filterwarnings("ignore", message=r".*fixed sampling defaults.*temperature will be ignored.*")
 warnings.filterwarnings("ignore", message=r".*automatic function calling \(AFC\).*")
@@ -29,7 +30,7 @@ class ForensicAuditOutput(BaseModel):
 
 
 class InvestmentMemo(BaseModel):
-    verdict: str = Field(description="BUY, WATCHLIST, or AVOID. This is advisory and will be replaced by the deterministic engine.")
+    verdict: str = Field(description="BUY, WATCHLIST, or AVOID. Advisory only; deterministic Python decides the verdict.")
     conviction_score: int = Field(description="1-10 confidence in the written thesis, not a replacement for the deterministic score")
     executive_summary: str = Field(description="Clear investment thesis and business-quality interpretation")
     financial_strengths: List[str] = Field(description="Key financial and competitive strengths")
@@ -38,33 +39,55 @@ class InvestmentMemo(BaseModel):
 
 
 class AnalysisOrchestrator:
+    """LLM-only qualitative layer; no financial-number extraction."""
+
     def __init__(self, model_name: str | None = None, temperature: float = 0.0):
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not detected. Set it in .env.")
+            raise ValueError(
+                "GEMINI_API_KEY or GOOGLE_API_KEY environment variable not detected. Set it in .env."
+            )
         selected_model = model_name or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        self.llm = ChatGoogleGenerativeAI(model=selected_model, temperature=temperature, google_api_key=api_key)
+        self.llm = ChatGoogleGenerativeAI(
+            model=selected_model,
+            temperature=temperature,
+            google_api_key=api_key,
+        )
 
     def audit_forensics(self, auditor_text: str, notes_text: str) -> ForensicAuditOutput:
         prompt = ChatPromptTemplate.from_messages([
             ("system", FORENSIC_AUDITOR_SYSTEM),
-            ("human", "Perform the forensic governance audit.\n\n=== AUDITOR REPORT / CARO ===\n{auditor_text}\n\n=== NOTES ===\n{notes_text}"),
+            (
+                "human",
+                "Perform the forensic governance audit.\n\n"
+                "=== AUDITOR REPORT / CARO ===\n{auditor_text}\n\n"
+                "=== NOTES ===\n{notes_text}",
+            ),
         ])
         chain = prompt | self.llm.with_structured_output(ForensicAuditOutput)
-        return chain.invoke({"auditor_text": auditor_text or "No auditor text extracted.", "notes_text": notes_text or "No notes text extracted."})
+        return chain.invoke({
+            "auditor_text": auditor_text or "No auditor text extracted.",
+            "notes_text": notes_text or "No notes text extracted.",
+        })
 
-    def extract_metrics_payload(self, financial_statements_text: str) -> CompanyFinancialHistory:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", FINANCIAL_EXTRACTION_SYSTEM),
-            ("human", "Extract the chronological financial history into the required schema. Normalize all values to INR Crores.\n\n{statements}"),
-        ])
-        chain = prompt | self.llm.with_structured_output(CompanyFinancialHistory)
-        return chain.invoke({"statements": financial_statements_text or "No financial statements text extracted."})
-
-    def run_investment_committee(self, forensic: ForensicAuditOutput, calculated_ratios: Dict[str, Any], quality_score: Dict[str, Any], valuation: Dict[str, Any] | None = None) -> InvestmentMemo:
+    def run_investment_committee(
+        self,
+        forensic: ForensicAuditOutput,
+        calculated_ratios: Dict[str, Any],
+        quality_score: Dict[str, Any],
+        valuation: Dict[str, Any] | None = None,
+    ) -> InvestmentMemo:
         prompt = ChatPromptTemplate.from_messages([
             ("system", INVESTMENT_COMMITTEE_SYSTEM),
-            ("human", "Interpret the evidence. Do not override Python's numeric score or valuation.\n\n=== FORENSIC ===\n{forensics}\n\n=== FUNDAMENTALS ===\n{ratios}\n\n=== QUALITY SCORE ===\n{quality}\n\n=== VALUATION ===\n{valuation}"),
+            (
+                "human",
+                "Interpret the evidence. Do not override Python's numeric score, "
+                "valuation, or final verdict.\n\n"
+                "=== FORENSIC ===\n{forensics}\n\n"
+                "=== FUNDAMENTALS ===\n{ratios}\n\n"
+                "=== QUALITY SCORE ===\n{quality}\n\n"
+                "=== VALUATION ===\n{valuation}",
+            ),
         ])
         chain = prompt | self.llm.with_structured_output(InvestmentMemo)
         return chain.invoke({
