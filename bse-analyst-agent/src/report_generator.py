@@ -116,6 +116,7 @@ def generate_investment_text_report(
     components = financial.get("financial_components") or {}
     history = financial.get("history") or []
     ai = decision.get("ai") or {}
+    decision_components = decision.get("decision_components") or {}
 
     lines: list[str] = [
         "NSE EQUITY INVESTMENT REPORT",
@@ -124,11 +125,12 @@ def generate_investment_text_report(
         f"Generated: {datetime.now().isoformat(timespec='seconds')}",
         f"VERDICT: {_fmt(decision.get('verdict'))}",
         f"DECISION SCORE: {_fmt(decision.get('decision_score'))}",
-        f"FUNDAMENTAL SCORE: {_fmt(financial.get('financial_score'))}",
-        f"GOVERNANCE SCORE: {_fmt(governance.get('risk_score'))}",
+        f"FUNDAMENTAL SCORE: {_fmt(decision_components.get('fundamental_quality', financial.get('financial_score')))}",
+        f"GOVERNANCE SCORE: {_fmt(decision_components.get('governance'))}",
+        f"GOVERNANCE RISK SCORE: {_fmt(governance.get('risk_score'))}",
         f"GOVERNANCE GRADE: {_fmt(governance.get('governance_grade'))}",
-        f"VALUATION SCORE: {_fmt(decision.get('valuation_score'))}",
-        f"VALUATION STATE: {_fmt(valuation.get('state') or valuation.get('reason'))}",
+        f"VALUATION SCORE: {_fmt(decision_components.get('valuation'))}",
+        f"VALUATION STATE: {_fmt(decision.get('valuation_state'))}",
         "",
         SECTION_LINE,
         "CORPORATE GOVERNANCE",
@@ -192,6 +194,8 @@ def generate_investment_text_report(
         f"Fair Value: {_fmt(valuation.get('fair_value'))}",
         f"Buy Below: {_fmt(valuation.get('buy_below'))}",
         f"Reason: {_fmt(valuation.get('reason'))}",
+        f"Decision Score: {_fmt(decision_components.get('valuation'))}",
+        f"Decision State: {_fmt(decision.get('valuation_state'))}",
         "",
         SECTION_LINE,
         "FINAL INVESTMENT DECISION",
@@ -294,6 +298,7 @@ def generate_investment_report(
     components = financial.get("financial_components") or {}
     history = financial.get("history") or []
     ai = decision.get("ai") or {}
+    decision_components = decision.get("decision_components") or {}
     verdict = decision.get("verdict") or "N/A"
 
     if output_file is None:
@@ -301,9 +306,9 @@ def generate_investment_report(
 
     score_items = [
         ("Decision", decision.get("decision_score")),
-        ("Fundamentals", financial.get("financial_score")),
-        ("Governance", governance.get("risk_score")),
-        ("Valuation", decision.get("valuation_score")),
+        ("Fundamentals", decision_components.get("fundamental_quality", financial.get("financial_score"))),
+        ("Governance", decision_components.get("governance")),
+        ("Valuation", decision_components.get("valuation")),
     ]
     score_cards = "".join(
         f'<div class="score-card"><div class="score-label">{_escape(name)}</div>'
@@ -369,13 +374,15 @@ def generate_investment_report(
   <div class="panel">
     <p><b>Decision score:</b> {_escape(_fmt(decision.get('decision_score')))}</p>
     <p><b>Reason:</b> {_escape(_fmt(decision.get('reason'), 'No decision reason available.'))}</p>
-    <p><b>Valuation state:</b> {_escape(_fmt(valuation.get('state') or valuation.get('reason')))}</p>
+    <p><b>Valuation score:</b> {_escape(_fmt(decision_components.get('valuation')))}</p>
+    <p><b>Valuation state:</b> {_escape(_fmt(decision.get('valuation_state')))}</p>
   </div>
 
   <h2>Corporate Governance</h2>
   <div class="two">
     <div class="panel">
       <p><b>Grade:</b> {_escape(_fmt(governance.get('governance_grade')))}</p>
+      <p><b>Decision governance score:</b> {_escape(_fmt(decision_components.get('governance')))}</p>
       <p><b>Risk score:</b> {_escape(_fmt(governance.get('risk_score')))}</p>
       <p><b>Annual-report score:</b> {_escape(_fmt(governance.get('annual_report_score')))}</p>
       <p><b>Reports scanned:</b> {_escape(_fmt(governance.get('reports_scanned'), '0'))}</p>
@@ -402,6 +409,8 @@ def generate_investment_report(
     <p><b>Available:</b> {_escape(_fmt(valuation.get('available'), 'False'))}</p>
     <p><b>Fair value:</b> {_escape(_fmt(valuation.get('fair_value')))}</p>
     <p><b>Buy below:</b> {_escape(_fmt(valuation.get('buy_below')))}</p>
+    <p><b>Decision score:</b> {_escape(_fmt(decision_components.get('valuation')))}</p>
+    <p><b>Decision state:</b> {_escape(_fmt(decision.get('valuation_state')))}</p>
     <p><b>Reason:</b> {_escape(_fmt(valuation.get('reason')))}</p>
   </div>
 
