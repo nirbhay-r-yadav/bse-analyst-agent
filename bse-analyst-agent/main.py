@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from src.deep_scanner import DeepScannerEngine
 from src.nse_universe import NSEUniverse
-from src.report_generator import generate_investment_report
+from src.report_generator import generate_investment_report, generate_investment_text_report
 from src.smallcap_scanner import SmallMicrocapConfig, classify_market_cap
 
 load_dotenv()
@@ -120,6 +120,15 @@ def run_single_stock(symbol: str, live_filings: bool = True) -> Dict[str, Any]:
     """Analyze a single stock through the exact same pipeline as scanner output."""
     result = DeepScannerEngine().analyze_symbol(symbol, live_filings=live_filings)
     _show_result(result)
+
+    if result.get("status") == "ANALYZED":
+        output_dir = os.path.join(OUTPUT_DIR, symbol)
+        try:
+            text_report = generate_investment_text_report(output_dir)
+            print(f"[+] Text investment report: {text_report}")
+        except Exception as exc:
+            print(f"[!] Text report generation failed: {type(exc).__name__}: {exc}")
+
     return result
 
 
@@ -141,12 +150,14 @@ def interactive() -> None:
                 continue
             result = run_single_stock(symbol)
             if result.get("status") == "ANALYZED":
-                report_file = os.path.join(OUTPUT_DIR, symbol, "investment_decision.txt")
-                if os.path.exists(report_file):
-                    open_report = input("Generate visual investment report? [Y/n]: ").strip().lower()
-                    if open_report in ("", "y", "yes"):
-                        generated = generate_investment_report(report_file)
+                output_dir = os.path.join(OUTPUT_DIR, symbol)
+                open_report = input("Generate visual investment report? [Y/n]: ").strip().lower()
+                if open_report in ("", "y", "yes"):
+                    try:
+                        generated = generate_investment_report(output_dir)
                         print(f"[+] Visual report generated: {generated}")
+                    except Exception as exc:
+                        print(f"[!] Visual report generation failed: {type(exc).__name__}: {exc}")
 
         elif choice == "2":
             run_universe_scan(refresh=False, top=50)
