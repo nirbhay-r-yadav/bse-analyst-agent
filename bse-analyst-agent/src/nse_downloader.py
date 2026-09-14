@@ -42,6 +42,12 @@ class NSEDownloader:
         self.session.headers.update(self.HEADERS)
         self._session_initialized = False
 
+    def _stock_dir(self, symbol: str) -> str:
+        """Return/create the stock-specific annual-report cache directory."""
+        path = os.path.join(self.download_dir, symbol.upper().strip())
+        os.makedirs(path, exist_ok=True)
+        return path
+
     def _init_session(self) -> bool:
         """Best-effort NSE homepage session initialization for API retry only."""
         try:
