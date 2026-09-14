@@ -1,7 +1,7 @@
 """Unified candidate analysis pipeline.
 
 Stage 1 (the universe scanner) supplies normalized market candidates here.
-This module owns the candidate-level orchestration for the new architecture:
+This module owns candidate-level orchestration for the new architecture:
 market candidate -> governance -> financials -> valuation -> decision.
 
 Deterministic calculations stay in the financial and corporate-risk engines;
@@ -15,7 +15,7 @@ import json
 import os
 from typing import Any, Dict, List
 
-from .agent import AnalysisOrchestrator
+from .agent import AnalysisOrchestrator, ForensicAuditOutput
 from .corporate_risk import CorporateRiskEngine, extract_announcements_from_rows
 from .decision_engine import calculate_investment_decision
 from .doc_parser import FinancialDocParser
@@ -55,13 +55,12 @@ class DeepScannerEngine:
 
     @staticmethod
     def _annual_report_gap(reports: List[Dict[str, Any]], audits: List[Dict[str, Any]]) -> str | None:
-        requested = min(10, len(reports))
         if not reports:
             return "No annual reports available"
         if len(audits) < len(reports):
             return f"Only {len(audits)}/{len(reports)} available reports were successfully audited"
-        if requested < 10:
-            return f"Only {requested}/10 requested annual reports are available"
+        if len(reports) < 10:
+            return f"Only {len(reports)}/10 requested annual reports are available"
         return None
 
     def _load_governance_evidence(
@@ -93,9 +92,8 @@ class DeepScannerEngine:
         audits: List[Dict[str, Any]] = []
         ai = self.orchestrator or AnalysisOrchestrator()
 
-        # Every available annual report is used for governance evidence.
-        # Financial numbers do NOT come from PDF/LLM extraction; they come
-        # exclusively from StructuredFinancialProvider below.
+        # All available annual reports contribute governance evidence. Their
+        # financial tables are intentionally NOT used for financial metrics.
         for item in reports[:10]:
             fiscal_year = item.get("fiscal_year", "Unknown")
             try:
@@ -127,10 +125,7 @@ class DeepScannerEngine:
                 )
 
         announcements = extract_announcements_from_rows(
-            [
-                *filing_data.get("announcements", []),
-                *filing_data.get("pit_risk_rows", []),
-            ]
+            [*filing_data.get("announcements", []), *filing_data.get("pit_risk_rows", [])]
         )
         corporate = self.risk_engine.assess(
             promoter_holding_pct=promoter_holding,
@@ -146,6 +141,26 @@ class DeepScannerEngine:
             corporate.data_gaps.append(gap)
 
         return filing_data, corporate, reports, audits
+
+    @staticmethod
+    def _forensic_for_committee(audits: List[Dict[str, Any]]) -> ForensicAuditOutput:
+        """Convert the latest audited annual-report evidence to the memo schema."""
+        if not audits:
+            return ForensicAuditOutput(
+                audit_opinion_type="Unavailable",
+                key_audit_matters=[],
+                contingent_liability_risk="Unavailable",
+                related_party_risk="Unavailable",
+                forensic_red_flags=["No annual-report forensic evidence available"],
+            )
+        latest = audits[0]
+        return ForensicAuditOutput(
+            audit_opinion_type=str(latest.get("audit_opinion_type") or "Unavailable"),
+            key_audit_matters=[],
+            contingent_liability_risk=str(latest.get("contingent_liability_risk") or "Unavailable"),
+            related_party_risk=str(latest.get("related_party_risk") or "Unavailable"),
+            forensic_red_flags=list(latest.get("forensic_red_flags") or []),
+        )
 
     def analyze_candidate(
         self,
@@ -178,9 +193,7 @@ class DeepScannerEngine:
                     "error": "Rejected before financial analysis due to a hard governance signal",
                 }
                 if persist:
-                    self._persist_stage_outputs(
-                        symbol, row, corporate, audits, None, None, None, result
-                    )
+                    self._persist_stage_outputs(symbol, corporate, audits, None, None, None, result)
                 return result
 
             try:
@@ -196,51 +209,33 @@ class DeepScannerEngine:
                     "error": str(exc),
                 }
                 if persist:
-                    self._persist_stage_outputs(
-                        symbol, row, corporate, audits, None, None, None, result
-                    )
+                    self._persist_stage_outputs(symbol, corporate, audits, None, None, None, result)
                 return result
 
-            governance_clean = (
-                not corporate.hard_fail
-                and corporate.governance_grade in {"A", "B"}
-            )
-
+            governance_clean = not corporate.hard_fail and corporate.governance_grade in {"A", "B"}
             price = self._float_or_none(row.get("price"))
             market_cap = self._float_or_none(row.get("market_cap_cr"))
-            shares_cr = (
-                market_cap / price
-                if price and price > 0 and market_cap and market_cap > 0
-                else None
-            )
+            shares_cr = market_cap / price if price and price > 0 and market_cap and market_cap > 0 else None
 
             ratios = self.financial_engine.calculate_ratios(history)
-            quality_full = self.financial_engine.calculate_quality(
-                ratios, governance_clean=True
-            )
+            quality_full = self.financial_engine.calculate_quality(ratios, governance_clean=True)
             financial_components = {
-                key: value
-                for key, value in quality_full.get("components", {}).items()
-                if key != "governance"
+                key: value for key, value in quality_full.get("components", {}).items() if key != "governance"
             }
             financial_score = sum(int(value or 0) for value in financial_components.values())
-
-            valuation = self.financial_engine.calculate_valuation(
-                price,
-                shares_cr,
-                history.years[-1].pat,
-                ratios.get("PAT CAGR (%)"),
-                target_pe=20.0,
-                margin_of_safety_pct=30.0,
-            ) if price is not None and shares_cr is not None else {
-                "available": False,
-                "reason": "Current price and shares outstanding are unavailable.",
-            }
-
-            quality = {
-                "components": financial_components,
-                "score_100": financial_score,
-            }
+            valuation = (
+                self.financial_engine.calculate_valuation(
+                    price,
+                    shares_cr,
+                    history.years[-1].pat,
+                    ratios.get("PAT CAGR (%)"),
+                    target_pe=20.0,
+                    margin_of_safety_pct=30.0,
+                )
+                if price is not None and shares_cr is not None
+                else {"available": False, "reason": "Current price and shares outstanding are unavailable."}
+            )
+            quality = {"components": financial_components, "score_100": financial_score}
             decision = calculate_investment_decision(
                 quality=quality,
                 ratios=ratios,
@@ -251,7 +246,7 @@ class DeepScannerEngine:
 
             ai = self.orchestrator or AnalysisOrchestrator()
             memo = ai.run_investment_committee(
-                None,
+                self._forensic_for_committee(audits),
                 ratios,
                 quality,
                 valuation,
@@ -271,7 +266,7 @@ class DeepScannerEngine:
                 "governance_grade": corporate.governance_grade,
                 "corporate_risk_flags": ";".join(corporate.risk_flags),
                 "corporate_data_gaps": ";".join(corporate.data_gaps),
-                "promoter_holding_pct": filing_data.get("promoter_holding_pct") or row.get("promoter_holding_pct"),
+                "promoter_holding_pct": filing_data.get("promoter_holding_pct") if filing_data.get("promoter_holding_pct") is not None else row.get("promoter_holding_pct"),
                 "promoter_pledge_pct": filing_data.get("promoter_pledge_pct") if filing_data.get("promoter_pledge_pct") is not None else row.get("promoter_pledge_pct"),
                 "promoter_change_pct": filing_data.get("promoter_change_pct") if filing_data.get("promoter_change_pct") is not None else row.get("promoter_change_pct"),
                 "shareholding_as_on": filing_data.get("shareholding", {}).get("as_on_date"),
@@ -293,19 +288,12 @@ class DeepScannerEngine:
 
             if persist:
                 self._persist_stage_outputs(
-                    symbol, row, corporate, audits, history, ratios, quality, result,
-                    valuation=valuation,
-                    decision=decision,
-                    memo=memo,
+                    symbol, corporate, audits, history, ratios, quality, result,
+                    valuation=valuation, decision=decision, memo=memo,
                 )
             return result
         except Exception as exc:
-            return {
-                **row,
-                "status": "ERROR",
-                "stage": "PIPELINE",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+            return {**row, "status": "ERROR", "stage": "PIPELINE", "error": f"{type(exc).__name__}: {exc}"}
 
     @staticmethod
     def _float_or_none(value: Any) -> float | None:
@@ -319,7 +307,6 @@ class DeepScannerEngine:
     def _persist_stage_outputs(
         self,
         symbol: str,
-        row: Dict[str, Any],
         corporate: Any,
         audits: List[Dict[str, Any]],
         history: Any,
@@ -396,25 +383,16 @@ class DeepScannerEngine:
         live_filings=True,
     ) -> List[Dict[str, Any]]:
         if not os.path.exists(input_csv):
-            raise FileNotFoundError(
-                f"Stage-1 CSV not found: {input_csv}. Run --scan first."
-            )
-
+            raise FileNotFoundError(f"Stage-1 CSV not found: {input_csv}. Run --scan first.")
         with open(input_csv, newline="", encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))[:deep_limit]
-
         results = [self.analyze_candidate(row, live_filings=live_filings) for row in rows]
         analyzed = [r for r in results if r.get("status") == "ANALYZED"]
         analyzed.sort(
-            key=lambda r: (
-                r.get("verdict") == "BUY",
-                float(r.get("quality_score") or 0),
-                float(r.get("ai_conviction") or 0),
-            ),
+            key=lambda r: (r.get("verdict") == "BUY", float(r.get("quality_score") or 0), float(r.get("ai_conviction") or 0)),
             reverse=True,
         )
         selected = analyzed[:top]
-
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, "small_microcap_deep_analysis.csv")
         fields = sorted({key for row in results for key in row.keys()})
@@ -422,21 +400,17 @@ class DeepScannerEngine:
             writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(results)
-
         record_run(
-            "DEEP_SCAN",
-            summarize_results(results),
-            output_dir=output_dir,
+            "DEEP_SCAN", summarize_results(results), output_dir=output_dir,
             notes=f"live_filings={'ON' if live_filings else 'OFF'}; top={top}; deep_limit={deep_limit}",
         )
-
         print(f"[+] Stage-2 candidates processed: {len(rows)}")
         print(f"[+] Stage-2 fully analyzed: {len(analyzed)}")
         summary = summarize_results(results)
         print(f"ANALYZED={summary['analyzed']}")
         print(f"ERROR={summary['errors']}")
         for item in results:
-            if item.get("status") not in {"ANALYZED"}:
+            if item.get("status") != "ANALYZED":
                 print(f"[{item.get('status')}] {item.get('symbol', '')} {item.get('error', '')}")
         print(f"[+] Live NSE filing checks: {'ON' if live_filings else 'OFF'}")
         print(f"[+] Saved full deep-analysis results: {path}")
@@ -444,29 +418,23 @@ class DeepScannerEngine:
         print("-" * 110)
         for i, item in enumerate(selected, 1):
             print(
-                f"{i:>2}. {item['symbol']:<15} "
-                f"{item.get('market_cap_category',''):<9} "
-                f"{item.get('verdict',''):<10} "
-                f"Score {item.get('quality_score')}  "
-                f"Gov {item.get('governance_grade')}  "
-                f"Fair ₹{item.get('fair_value')}"
+                f"{i:>2}. {item['symbol']:<15} {item.get('market_cap_category',''):<9} "
+                f"{item.get('verdict',''):<10} Score {item.get('quality_score')} "
+                f"Gov {item.get('governance_grade')} Fair ₹{item.get('fair_value')}"
             )
         return selected
 
     def analyze_symbol(self, symbol: str, live_filings: bool = True) -> Dict[str, Any]:
-        """Single-stock entry point using the same pipeline as scanner candidates."""
+        """Single-stock entry point using exactly the same pipeline as scanner candidates."""
         symbol = symbol.strip().upper()
         from .nse_universe import NSEUniverse
-
-        quote = NSEUniverse().quote(symbol)
-        return self.analyze_candidate(quote, live_filings=live_filings)
+        return self.analyze_candidate(NSEUniverse().quote(symbol), live_filings=live_filings)
 
 
 def analyze_candidate(row, orchestrator=None, filings_client=None, live_filings=True):
-    return DeepScannerEngine(
-        orchestrator=orchestrator,
-        filings_client=filings_client,
-    ).analyze_candidate(row, live_filings=live_filings)
+    return DeepScannerEngine(orchestrator=orchestrator, filings_client=filings_client).analyze_candidate(
+        row, live_filings=live_filings
+    )
 
 
 def run_deep_scan(
