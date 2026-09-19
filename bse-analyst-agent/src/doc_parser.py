@@ -1,11 +1,11 @@
-import fitz  # PyMuPDF
+import pymupdf
 import re
 from typing import Dict
 
 
 class FinancialDocParser:
     def __init__(self, pdf_path: str):
-        self.doc = fitz.open(pdf_path)
+        self.doc = pymupdf.open(pdf_path)
 
     def find_section_pages(self, keyword_pattern: str, max_pages: int = 25) -> str:
         """Locate pages whose headings match a pattern and return their text."""
