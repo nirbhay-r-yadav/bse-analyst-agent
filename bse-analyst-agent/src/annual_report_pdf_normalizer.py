@@ -41,7 +41,7 @@ def _to_crore(value: float | None, page_text: str) -> float | None:
     if value is None:
         return None
     lower = page_text.lower()
-    if "in lakhs" in lower or "₹ in lakhs" in lower:
+    if re.search(r"\bin\s*(?:₹|rs\.?|inr)?\s*lakhs?\b", lower):
         return value / 100.0
     if "in millions" in lower:
         return value / 10.0
