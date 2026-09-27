@@ -14,7 +14,9 @@ class FinancialHistoryRow:
     source_file: str
     revenue: float | None = None
     pat: float | None = None
+    pat_owner: float | None = None
     ebit: float | None = None
+    pbt: float | None = None
     cfo: float | None = None
     debt: float | None = None
     cash: float | None = None
@@ -118,6 +120,8 @@ class FinancialHistoryStore:
             errors.append("negative_revenue")
         if row.debt is not None and row.debt < 0:
             errors.append("negative_debt")
+        if row.pat_owner is not None and row.pat is not None and row.pat_owner > row.pat * 1.001 and row.pat >= 0:
+            errors.append("owner_pat_exceeds_total_pat")
         return errors
 
 
