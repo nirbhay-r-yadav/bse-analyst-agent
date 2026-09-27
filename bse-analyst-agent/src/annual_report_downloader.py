@@ -26,6 +26,15 @@ class AnnualReportRecord:
     size: str | None = None
     source: str = "NSE Annual Reports"
 
+    @property
+    def report_year(self) -> int | None:
+        years = [int(y) for y in re.findall(r"20\\d{2}", f"{self.from_year} {self.to_year}")]
+        return max(years) if years else None
+
+    @property
+    def file_type(self) -> str:
+        return Path(self.file_name).suffix.lower().lstrip(".") or "unknown"
+
 
 class AnnualReportDownloader:
     """Discover and download the official NSE annual-report archive.
@@ -149,6 +158,22 @@ class AnnualReportDownloader:
             paths.append(self.download(record))
         self._write_manifest(symbol, records)
         return paths
+
+    def inventory(self, symbol: str, min_year: int = 2017, max_year: int | None = None) -> list[dict[str, Any]]:
+        """Return a deterministic year/file inventory without downloading files."""
+        records = self.discover(symbol)
+        latest = max((r.report_year for r in records if r.report_year), default=None)
+        end_year = max_year or latest or min_year
+        start_year = min_year
+        inventory: list[dict[str, Any]] = []
+        for year in range(start_year, end_year + 1):
+            matches = [r for r in records if r.report_year == year]
+            inventory.append({
+                "fiscal_year": f"FY{year}",
+                "records": [asdict(r) | {"file_type": r.file_type} for r in matches],
+                "available": bool(matches),
+            })
+        return inventory
 
     def _write_manifest(self, symbol: str, records: list[AnnualReportRecord]) -> None:
         destination = self.root / symbol.upper() / "manifest.json"
