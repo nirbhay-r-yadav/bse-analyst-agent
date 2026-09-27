@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 import re
@@ -13,16 +14,24 @@ TAG_ALIASES = {
         "revenue",
         "turnover",
     ),
-    "pat": (
+    "pat_owner": (
         "profitlossattributabletoownersofparent",
         "profitlossattributabletoownersofparentcompany",
+    ),
+    "pat_total": (
         "profitlossforperiod",
         "profitloss",
     ),
     "ebit": (
+        "operatingprofit",
+        "profitfromoperations",
+        "profitbeforefinancecostsandtax",
+        "profitbeforeinterestandtax",
+        "earningsbeforeinterestandtax",
+    ),
+    "pbt": (
         "profitbeforetax",
         "profitbeforetaxandexceptionalitems",
-        "operatingprofit",
     ),
     "cfo": (
         "cashflowsfromusedinoperatingactivities",
@@ -40,11 +49,11 @@ TAG_ALIASES = {
         "cashandbankbalances",
         "cashandcashdeposits",
     ),
-    "equity": (
+    "equity_owner": (
         "equityattributabletoownersofparent",
         "equityattributabletoownersoftheparent",
-        "equity",
     ),
+    "equity_total": ("equity",),
 }
 
 
@@ -76,8 +85,17 @@ def _number(value: str | None) -> float | str | None:
         return raw
 
 
+def _year_from_end(end: str) -> str:
+    return f"FY{end[:4]}"
+
+
 class AnnualXBRLParser:
-    """Read annual-report XBRL without hard-coding one taxonomy namespace."""
+    """Parse annual-report XBRL into auditable, normalized facts.
+
+    Values are normalized to INR crore only when the XBRL unit is a monetary
+    INR unit. The parser never treats PBT as EBIT and never selects a
+    dimensioned fact over an undimensioned annual fact.
+    """
 
     def parse(self, path: str | Path) -> list[XBRLFact]:
         root = ET.parse(path).getroot()
@@ -89,7 +107,13 @@ class AnnualXBRLParser:
             context_id = element.attrib.get("id")
             if not context_id:
                 continue
-            item: dict[str, Any] = {"start": None, "end": None, "instant": None, "dimensions": []}
+
+            item: dict[str, Any] = {
+                "start": None,
+                "end": None,
+                "instant": None,
+                "dimensions": [],
+            }
             for child in element.iter():
                 name = _local(child.tag)
                 if name == "startdate":
@@ -104,9 +128,9 @@ class AnnualXBRLParser:
 
         facts: list[XBRLFact] = []
         for element in root.iter():
-            if "contextRef" not in element.attrib:
-                continue
             context_ref = element.attrib.get("contextRef")
+            if not context_ref:
+                continue
             context = contexts.get(context_ref, {})
             facts.append(
                 XBRLFact(
@@ -123,58 +147,106 @@ class AnnualXBRLParser:
         return facts
 
     @staticmethod
-    def annual_facts(facts: list[XBRLFact]) -> list[XBRLFact]:
-        result = []
-        for fact in facts:
-            if fact.dimensions or not fact.start or not fact.end:
-                continue
-            if not fact.end.endswith("-03-31"):
-                continue
-            try:
-                from datetime import date
-                days = (date.fromisoformat(fact.end) - date.fromisoformat(fact.start)).days
-            except ValueError:
-                continue
-            if 300 <= days <= 370:
-                result.append(fact)
-        return result
+    def is_annual(fact: XBRLFact) -> bool:
+        if fact.dimensions or not fact.start or not fact.end:
+            return False
+        if not fact.end.endswith("-03-31"):
+            return False
+        try:
+            days = (date.fromisoformat(fact.end) - date.fromisoformat(fact.start)).days
+        except ValueError:
+            return False
+        return 300 <= days <= 370
+
+    @classmethod
+    def annual_facts(cls, facts: list[XBRLFact]) -> list[XBRLFact]:
+        return [fact for fact in facts if cls.is_annual(fact)]
 
     @staticmethod
-    def _match(facts: list[XBRLFact], aliases: tuple[str, ...], end: str) -> float | None:
+    def detect_basis(facts: list[XBRLFact]) -> str:
+        values: set[str] = set()
+        for fact in facts:
+            if fact.tag != "natureofreportstandaloneconsolidated":
+                continue
+            value = str(fact.value or "").strip().lower()
+            if "consolidated" in value:
+                values.add("consolidated")
+            elif "standalone" in value:
+                values.add("standalone")
+        if len(values) == 1:
+            return next(iter(values))
+        return "unknown"
+
+    @staticmethod
+    def _to_crore(value: float | str | None, unit: str | None) -> float | None:
+        if not isinstance(value, (int, float)):
+            return None
+        unit_name = (unit or "").lower()
+        if "inr" not in unit_name and "rupee" not in unit_name and unit_name:
+            return float(value)
+        return float(value) / 10_000_000.0
+
+    @classmethod
+    def _match(
+        cls,
+        facts: list[XBRLFact],
+        aliases: tuple[str, ...],
+        end: str,
+    ) -> float | None:
         candidates = [
-            f for f in facts
-            if f.end == end and isinstance(f.value, (int, float))
-            and any(alias in f.tag for alias in aliases)
+            fact for fact in facts
+            if fact.end == end
+            and isinstance(fact.value, (int, float))
+            and any(alias in fact.tag for alias in aliases)
         ]
         if not candidates:
             return None
-        # Prefer the most exact alias and the largest populated context only
-        # after filtering to undimensioned annual facts.
-        candidates.sort(
-            key=lambda f: max((len(alias) for alias in aliases if alias in f.tag), default=0),
-            reverse=True,
-        )
-        return float(candidates[0].value)
 
-    def normalize(self, facts: list[XBRLFact], source_file: str) -> list[dict[str, Any]]:
-        annual = self.annual_facts(facts)
-        ends = sorted({f.end for f in annual if f.end})
+        def score(fact: XBRLFact) -> tuple[int, int]:
+            exactness = max(
+                (len(alias) for alias in aliases if fact.tag == alias),
+                default=0,
+            )
+            return exactness, len(fact.tag)
+
+        candidates.sort(key=score, reverse=True)
+        selected = candidates[0]
+        return cls._to_crore(selected.value, selected.unit)
+
+    @classmethod
+    def normalize(
+        cls,
+        facts: list[XBRLFact],
+        source_file: str,
+    ) -> list[dict[str, Any]]:
+        annual = cls.annual_facts(facts)
+        basis = cls.detect_basis(facts)
+        ends = sorted({fact.end for fact in annual if fact.end})
+
         rows: list[dict[str, Any]] = []
         for end in ends:
-            fiscal_year = f"FY{end[:4]}"
-            row = {
-                "fiscal_year": fiscal_year,
-                "basis": "unknown",
-                "source_type": "annual_xbrl",
-                "source_file": source_file,
-                "revenue": self._match(annual, TAG_ALIASES["revenue"], end),
-                "pat": self._match(annual, TAG_ALIASES["pat"], end),
-                "ebit": self._match(annual, TAG_ALIASES["ebit"], end),
-                "cfo": self._match(annual, TAG_ALIASES["cfo"], end),
-                "debt": self._match(annual, TAG_ALIASES["debt"], end),
-                "cash": self._match(annual, TAG_ALIASES["cash"], end),
-                "equity": self._match(annual, TAG_ALIASES["equity"], end),
-                "confidence": "unvalidated",
-            }
-            rows.append(row)
+            pat_owner = cls._match(annual, TAG_ALIASES["pat_owner"], end)
+            pat_total = cls._match(annual, TAG_ALIASES["pat_total"], end)
+            equity_owner = cls._match(annual, TAG_ALIASES["equity_owner"], end)
+            equity_total = cls._match(annual, TAG_ALIASES["equity_total"], end)
+
+            rows.append(
+                {
+                    "fiscal_year": _year_from_end(end),
+                    "basis": basis,
+                    "source_type": "annual_xbrl",
+                    "source_file": source_file,
+                    "revenue": cls._match(annual, TAG_ALIASES["revenue"], end),
+                    "pat": pat_owner if pat_owner is not None else pat_total,
+                    "pat_owner": pat_owner,
+                    "ebit": cls._match(annual, TAG_ALIASES["ebit"], end),
+                    "pbt": cls._match(annual, TAG_ALIASES["pbt"], end),
+                    "cfo": cls._match(annual, TAG_ALIASES["cfo"], end),
+                    "debt": cls._match(annual, TAG_ALIASES["debt"], end),
+                    "cash": cls._match(annual, TAG_ALIASES["cash"], end),
+                    "equity": equity_total if equity_total is not None else equity_owner,
+                    "equity_owner": equity_owner,
+                    "confidence": "unvalidated",
+                }
+            )
         return rows
