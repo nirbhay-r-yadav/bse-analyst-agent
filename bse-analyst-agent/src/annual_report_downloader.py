@@ -28,7 +28,7 @@ class AnnualReportRecord:
 
     @property
     def report_year(self) -> int | None:
-        years = [int(y) for y in re.findall(r"20\\d{2}", f"{self.from_year} {self.to_year}")]
+        years = [int(y) for y in re.findall(r"20\d{2}", f"{self.from_year} {self.to_year}")]
         return max(years) if years else None
 
     @property
