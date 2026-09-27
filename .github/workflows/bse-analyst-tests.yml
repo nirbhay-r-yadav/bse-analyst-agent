@@ -2,7 +2,7 @@ name: BSE Analyst Agent Tests
 
 on:
   push:
-    branches: [main, v2-equity-analysis, v3-final, v8-investment-decision-engine]
+    branches: [main, v2-equity-analysis, v3-final, v8-investment-decision-engine, v9-10-year-financial-history]
   pull_request:
     branches: [main, v8-investment-decision-engine]
 
