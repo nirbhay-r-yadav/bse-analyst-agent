@@ -117,6 +117,8 @@ class AnalysisOrchestrator:
         capital_allocation: Dict[str, Any] = Field(default_factory=dict)
         business_risks: List[Dict[str, Any]] = Field(default_factory=list)
         management: Dict[str, Any] = Field(default_factory=dict)
+        management_promises: List[Dict[str, Any]] = Field(default_factory=list)
+        management_execution: Dict[str, Any] = Field(default_factory=dict)
         ten_year_evolution: List[str] = Field(default_factory=list)
         emerging_risks: List[str] = Field(default_factory=list)
         limitations: List[str] = Field(default_factory=list)
