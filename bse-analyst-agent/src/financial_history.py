@@ -18,9 +18,11 @@ class FinancialHistoryRow:
     ebit: float | None = None
     pbt: float | None = None
     cfo: float | None = None
+    capex: float | None = None
     debt: float | None = None
     cash: float | None = None
     equity: float | None = None
+    equity_owner: float | None = None
     confidence: str = "unvalidated"
 
 
@@ -37,13 +39,7 @@ class FinancialHistoryStore:
     """
 
     REQUIRED_FIELDS = (
-        "revenue",
-        "pat",
-        "ebit",
-        "cfo",
-        "debt",
-        "cash",
-        "equity",
+        "revenue", "pat", "ebit", "cfo", "capex", "debt", "cash", "equity"
     )
 
     def __init__(self, root: str | Path = "data/financial_history"):
@@ -118,6 +114,8 @@ class FinancialHistoryStore:
             errors.append("invalid_source_type")
         if row.revenue is not None and row.revenue < 0:
             errors.append("negative_revenue")
+        if row.capex is not None and row.capex < 0:
+            errors.append("negative_capex")
         if row.debt is not None and row.debt < 0:
             errors.append("negative_debt")
         if row.pat_owner is not None and row.pat is not None and row.pat_owner > row.pat * 1.001 and row.pat >= 0:

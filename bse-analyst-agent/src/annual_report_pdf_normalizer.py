@@ -13,7 +13,7 @@ FIELD_PATTERNS = {
     "pat": (r"profit for the (year|period)", r"profit for the year"),
     "ebit": (r"profit before finance costs and tax", r"operating profit"),
     "pbt": (r"profit before tax",),
-    "cfo": (r"net cash generated from operating activities", r"cash flows from operating activities"),
+    "cfo": (r"net cash generated from operating activities", r"cash flows from operating activities"),\n    "capex": (r"purchase of property, plant and equipment", r"capital expenditure", r"purchase of ppe"),
     "debt": (r"total borrowings", r"borrowings"),
     "cash": (r"cash and cash equivalents", r"cash and bank balances"),
     "equity_owner": (r"equity attributable to owners",),

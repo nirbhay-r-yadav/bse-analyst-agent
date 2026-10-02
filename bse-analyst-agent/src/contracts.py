@@ -83,6 +83,7 @@ PUBLIC_MODULE_APIS = {
     "annual_report_inventory": "src.annual_report_inventory.build_inventory",
     "financial_history": "src.financial_history.FinancialHistoryStore",
     "financial_history_adapter": "src.financial_history_adapter.to_company_history",
+    "business_analysis": "src.business_analysis.BusinessAnalysisEngine.analyze",
     "document_parser": "src.doc_parser.FinancialDocParser.extract_critical_sections",
     "stock_research": "src.stock_research_engine.StockResearchEngine.analyze",
     "deep_scan": "src.deep_scanner.DeepScannerEngine.run",
