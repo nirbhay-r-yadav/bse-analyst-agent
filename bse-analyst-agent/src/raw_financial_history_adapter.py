@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .financial_history import FinancialHistoryRow, FinancialHistoryStore
+from .nse_raw_filing_selector import rank_primary_filings
 
 
 REVENUE_TAGS = ("revenuefromoperations", "revenue", "turnover")
@@ -278,9 +279,36 @@ def build_from_raw(
     if not files:
         raise FileNotFoundError(f"No FY*.json raw financial files found: {directory}")
 
-    rows: list[FinancialHistoryRow] = []
+    # NSE can expose multiple XBRL submissions for the same period. Select
+    # only primary company-level financial statements; segment/detail-only
+    # filings are deliberately excluded before normalization.
+    by_year: dict[str, list[Path]] = {}
     for path in files:
-        rows.extend(normalize_raw_file(path))
+        match = re.fullmatch(r"FY(20\\d{2})", path.stem)
+        if not match:
+            continue
+        by_year.setdefault(path.stem, []).append(path)
+
+    rows: list[FinancialHistoryRow] = []
+    for fiscal_year in sorted(by_year):
+        candidates = rank_primary_filings(by_year[fiscal_year], fiscal_year)
+        if not candidates:
+            raise ValueError(
+                f"{directory}: {fiscal_year} has no suitable primary financial-statement XBRL filing"
+            )
+
+        errors: list[str] = []
+        for path in candidates:
+            try:
+                rows.extend(normalize_raw_file(path))
+                break
+            except ValueError as exc:
+                errors.append(str(exc))
+        else:
+            raise ValueError(
+                f"{directory}: {fiscal_year} primary XBRL candidates could not be normalized: "
+                + " | ".join(errors)
+            )
 
     return FinancialHistoryStore(history_root).save(symbol, rows)
 
