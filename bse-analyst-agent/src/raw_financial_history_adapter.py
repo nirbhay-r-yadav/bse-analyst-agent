@@ -183,7 +183,8 @@ def normalize_raw_file(path: str | Path) -> list[FinancialHistoryRow]:
         cash=_pick_instant(facts, CASH_TAGS, end),
         equity=(
             _pick_instant(facts, EQUITY_TOTAL_TAGS, end)
-            or _pick_instant(facts, EQUITY_OWNER_TAGS, end)
+            if _pick_instant(facts, EQUITY_TOTAL_TAGS, end) is not None
+            else _pick_instant(facts, EQUITY_OWNER_TAGS, end)
         ),
         equity_owner=_pick_instant(facts, EQUITY_OWNER_TAGS, end),
         confidence="unvalidated",
@@ -214,3 +215,14 @@ def build_from_raw(
         rows.extend(normalize_raw_file(path))
 
     return FinancialHistoryStore(history_root).save(symbol, rows)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build normalized financial history from existing NSE raw JSON")
+    parser.add_argument("symbol")
+    args = parser.parse_args()
+
+    destination = build_from_raw(args.symbol)
+    print(destination)
