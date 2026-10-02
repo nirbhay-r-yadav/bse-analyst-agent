@@ -28,9 +28,6 @@ class ManagementPromise:
 class BusinessAnalysisResult:
     symbol: str
     business_model: dict[str, Any] = field(default_factory=dict)
-    business_economics: dict[str, Any] = field(default_factory=dict)
-    capital_absorption: dict[str, Any] = field(default_factory=dict)
-    profit_engine: dict[str, Any] = field(default_factory=dict)
     management_promises: list[ManagementPromise] = field(default_factory=list)
     management_execution: dict[str, Any] = field(default_factory=dict)
     risks: dict[str, Any] = field(default_factory=dict)
