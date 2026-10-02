@@ -50,3 +50,28 @@ def test_normalize_existing_nse_shape(tmp_path):
     assert row.cash == 22201.0
     assert row.equity == 93297.0
     assert row.confidence == "validated"
+
+
+def test_normalize_legacy_nse_shape_without_basis(tmp_path):
+    facts = [
+        _fact("revenuefromoperations", "1000000000", start="2018-04-01", end="2019-03-31"),
+        _fact("profitlossforperiod", "100000000", start="2018-04-01", end="2019-03-31"),
+        _fact("profitbeforefinancecostsandtax", "150000000", start="2018-04-01", end="2019-03-31"),
+        _fact("profitbeforetax", "140000000", start="2018-04-01", end="2019-03-31"),
+        _fact("cashflowsfromusedinoperatingactivities", "120000000", start="2018-04-01", end="2019-03-31"),
+        _fact("purchaseofpropertyplantandequipment", "20000000", start="2018-04-01", end="2019-03-31"),
+        _fact("cashandcashequivalents", "300000000", instant="2019-03-31"),
+        _fact("equity", "500000000", instant="2019-03-31"),
+        _fact("borrowingscurrent", "0", instant="2019-03-31"),
+        _fact("borrowingsnoncurrent", "0", instant="2019-03-31"),
+    ]
+    path = tmp_path / "FY2019.json"
+    path.write_text(json.dumps({"fiscal_year": "FY2019", "facts": facts}), encoding="utf-8")
+
+    rows = normalize_raw_file(path)
+    row = rows[0]
+
+    assert row.basis == "unknown"
+    assert row.confidence == "unvalidated"
+    assert row.revenue == 100.0
+    assert row.pat == 10.0
