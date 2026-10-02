@@ -104,7 +104,7 @@ class FinancialHistoryStore:
         errors: list[str] = []
         if not row.fiscal_year.startswith("FY"):
             errors.append("invalid_fiscal_year")
-        if row.basis not in {"consolidated", "standalone"}:
+        if row.basis not in {"consolidated", "standalone", "unknown"}:
             errors.append("invalid_basis")
         if row.source_type not in {
             "annual_xbrl",
