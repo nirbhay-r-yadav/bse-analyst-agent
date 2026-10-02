@@ -121,7 +121,15 @@ def _pick_instant(facts: list[dict[str, Any]], aliases: tuple[str, ...], end: st
 
 
 def _basis(facts: list[dict[str, Any]]) -> str:
+    """Determine reporting basis without guessing from the filing filename.
+
+    Some NSE Integrated Filing JSON files omit the explicit
+    nature-of-report tag. In that case, the presence of non-controlling
+    interest facts is deterministic evidence that the filing is consolidated.
+    """
     values = set()
+    tags = {str(fact.get("tag", "")).lower() for fact in facts}
+
     for fact in facts:
         if str(fact.get("tag", "")).lower() != "natureofreportstandaloneconsolidated":
             continue
@@ -130,9 +138,25 @@ def _basis(facts: list[dict[str, Any]]) -> str:
             values.add("consolidated")
         elif "standalone" in value:
             values.add("standalone")
-    if len(values) != 1:
-        raise ValueError(f"Unable to determine unique reporting basis: {sorted(values)}")
-    return next(iter(values))
+
+    if len(values) == 1:
+        return next(iter(values))
+    if len(values) > 1:
+        raise ValueError(f"Conflicting reporting basis facts: {sorted(values)}")
+
+    # Consolidated statements expose NCI attribution. This is stronger
+    # evidence than assuming a basis from the filename or source label.
+    nci_tags = {
+        "profitorlossattributabletononcontrollinginterests",
+        "noncontrollinginterests",
+    }
+    if tags & nci_tags:
+        return "consolidated"
+
+    raise ValueError(
+        "Unable to determine reporting basis from raw NSE facts; "
+        "explicit basis or NCI evidence is required"
+    )
 
 
 def _debt(facts: list[dict[str, Any]], end: str) -> float | None:
