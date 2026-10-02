@@ -15,7 +15,12 @@ from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from src.prompts import FORENSIC_AUDITOR_SYSTEM, INVESTMENT_COMMITTEE_SYSTEM
+from src.prompts import (
+    FORENSIC_AUDITOR_SYSTEM,
+    INVESTMENT_COMMITTEE_SYSTEM,
+    BUSINESS_REPORT_EXTRACTION_SYSTEM,
+    BUSINESS_REPORT_SYNTHESIS_SYSTEM,
+)
 
 warnings.filterwarnings("ignore", message=r".*fixed sampling defaults.*temperature will be ignored.*")
 warnings.filterwarnings("ignore", message=r".*automatic function calling \(AFC\).*")
@@ -82,6 +87,58 @@ class AnalysisOrchestrator:
             "auditor_text": auditor_text or "No auditor text extracted.",
             "notes_text": notes_text or "No notes text extracted.",
         })
+
+
+    class BusinessEvidenceOutput(BaseModel):
+        """Meaningful business evidence extracted from one annual-report package."""
+        business_model: List[str] = Field(default_factory=list)
+        industry_and_market: List[str] = Field(default_factory=list)
+        competitive_position: List[str] = Field(default_factory=list)
+        strategy: List[str] = Field(default_factory=list)
+        growth_drivers: List[str] = Field(default_factory=list)
+        business_risks: List[str] = Field(default_factory=list)
+        management: List[str] = Field(default_factory=list)
+        promises: List[Dict[str, Any]] = Field(default_factory=list)
+        evidence: List[Dict[str, Any]] = Field(default_factory=list)
+
+    class BusinessResearchOutput(BaseModel):
+        """Cross-year business and risk synthesis."""
+        executive_summary: str = ""
+        business_model: Dict[str, Any] = Field(default_factory=dict)
+        industry_and_market: Dict[str, Any] = Field(default_factory=dict)
+        competitive_position: Dict[str, Any] = Field(default_factory=dict)
+        strategy: Dict[str, Any] = Field(default_factory=dict)
+        growth_drivers: List[str] = Field(default_factory=list)
+        business_risks: List[Dict[str, Any]] = Field(default_factory=list)
+        management: Dict[str, Any] = Field(default_factory=dict)
+        ten_year_evolution: List[str] = Field(default_factory=list)
+        emerging_risks: List[str] = Field(default_factory=list)
+        limitations: List[str] = Field(default_factory=list)
+        evidence: List[Dict[str, Any]] = Field(default_factory=list)
+
+    def extract_business_evidence(self, report_text: str, fiscal_year: str) -> "AnalysisOrchestrator.BusinessEvidenceOutput":
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", BUSINESS_REPORT_EXTRACTION_SYSTEM),
+            ("human",
+             "Extract meaningful business evidence from this annual report package. "
+             "Every evidence item must include fiscal_year and page when available. "
+             "For promises, include statement, promise_type, expected_outcome, fiscal_year and page.\n\n"
+             "=== FISCAL YEAR ===\n{fiscal_year}\n\n"
+             "=== ANNUAL REPORT EXCERPTS ===\n{report_text}"),
+        ])
+        chain = prompt | self.llm.with_structured_output(self.BusinessEvidenceOutput)
+        return chain.invoke({"fiscal_year": fiscal_year, "report_text": report_text})
+
+    def synthesize_business_research(self, evidence_json: str) -> "AnalysisOrchestrator.BusinessResearchOutput":
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", BUSINESS_REPORT_SYNTHESIS_SYSTEM),
+            ("human",
+             "Synthesize the following evidence from multiple annual reports into one "
+             "coherent Business & Risk Research report. Preserve source years/pages for material claims.\n\n"
+             "=== EXTRACTED EVIDENCE ===\n{evidence_json}"),
+        ])
+        chain = prompt | self.llm.with_structured_output(self.BusinessResearchOutput)
+        return chain.invoke({"evidence_json": evidence_json})
 
     def run_investment_committee(
         self,
