@@ -118,30 +118,66 @@ def _pick_instant(facts: list[dict[str, Any]], aliases: tuple[str, ...], end: st
     return None
 
 
+def _basis_text_evidence(fact: dict[str, Any]) -> set[str]:
+    """Extract basis words from legacy NSE fact/context metadata.
+
+    Some older raw files omit the explicit basis tag but retain filing or
+    dimension metadata. Inspect that metadata before declaring the basis
+    unknowable.
+    """
+    evidence: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_text = str(key).lower()
+                if any(token in key_text for token in ("basis", "natureofreport", "statementtype", "reporttype")):
+                    walk(child)
+                elif "dimension" in key_text or "member" in key_text or "segment" in key_text:
+                    walk(child)
+                elif isinstance(child, (dict, list)):
+                    walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+        elif isinstance(value, str):
+            normalized = re.sub(r"[^a-z]", "", value.lower())
+            if "consolidated" in normalized:
+                evidence.add("consolidated")
+            elif "standalone" in normalized:
+                evidence.add("standalone")
+
+    walk(fact.get("context") or {})
+    for key in ("basis", "reporting_basis", "reportingBasis", "statement_type", "statementType"):
+        if key in fact:
+            walk(fact[key])
+    return evidence
+
+
 def _basis(facts: list[dict[str, Any]], source_file: str | Path | None = None) -> str:
     """Determine reporting basis from explicit or deterministic filing evidence.
 
     NSE Integrated Filing JSON can omit the explicit nature-of-report tag.
-    We therefore accept only evidence that identifies consolidated reporting:
-    NCI facts, or owner-of-parent facts that are specific to consolidated
-    presentation. We never infer basis from the filename alone.
+    We accept explicit basis facts, NCI/owner-of-parent concepts, and basis
+    metadata retained in legacy fact contexts. We never infer basis from the
+    filename alone.
     """
-    values = set()
+    values: set[str] = set()
     tags = {str(fact.get("tag", "")).lower() for fact in facts}
 
     for fact in facts:
-        if str(fact.get("tag", "")).lower() != "natureofreportstandaloneconsolidated":
-            continue
-        value = str(fact.get("value") or "").strip().lower()
-        if "consolidated" in value:
-            values.add("consolidated")
-        elif "standalone" in value:
-            values.add("standalone")
+        if str(fact.get("tag", "")).lower() == "natureofreportstandaloneconsolidated":
+            value = str(fact.get("value") or "").strip().lower()
+            if "consolidated" in value:
+                values.add("consolidated")
+            elif "standalone" in value:
+                values.add("standalone")
+        values.update(_basis_text_evidence(fact))
 
     if len(values) == 1:
         return next(iter(values))
     if len(values) > 1:
-        raise ValueError(f"{source_file or 'raw NSE facts'}: conflicting reporting basis facts: {sorted(values)}")
+        raise ValueError(f"{source_file or 'raw NSE facts'}: conflicting reporting basis evidence: {sorted(values)}")
 
     nci_tags = {
         "profitorlossattributabletononcontrollinginterests",
@@ -150,9 +186,6 @@ def _basis(facts: list[dict[str, Any]], source_file: str | Path | None = None) -
     if tags & nci_tags:
         return "consolidated"
 
-    # Older NSE files may omit both the explicit basis tag and NCI facts.
-    # These owner-of-parent concepts are specific to consolidated reporting
-    # and provide deterministic evidence without relying on the filename.
     consolidated_only_tags = {
         "profitorlossattributabletoownersofparent",
         "profitlossattributabletoownersofparent",
@@ -169,8 +202,7 @@ def _basis(facts: list[dict[str, Any]], source_file: str | Path | None = None) -
     )
     raise ValueError(
         f"{source_file or 'raw NSE facts'}: unable to determine reporting basis; "
-        f"no explicit basis or consolidated-only evidence found. "
-        f"basis-related tags={hint_tags}"
+        f"no explicit basis or consolidated-only evidence found. basis-related tags={hint_tags}"
     )
 
 
