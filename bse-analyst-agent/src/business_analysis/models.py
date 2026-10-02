@@ -31,9 +31,12 @@ class BusinessAnalysisResult:
     executive_summary: str = ""
     business_model: dict[str, Any] = field(default_factory=dict)
     industry_and_market: dict[str, Any] = field(default_factory=dict)
+    products_and_customers: dict[str, Any] = field(default_factory=dict)
     competitive_position: dict[str, Any] = field(default_factory=dict)
     strategy: dict[str, Any] = field(default_factory=dict)
     growth_drivers: list[str] = field(default_factory=list)
+    economics: dict[str, Any] = field(default_factory=dict)
+    capital_allocation: dict[str, Any] = field(default_factory=dict)
     business_risks: list[dict[str, Any]] = field(default_factory=list)
     management: dict[str, Any] = field(default_factory=dict)
     management_promises: list[ManagementPromise] = field(default_factory=list)
