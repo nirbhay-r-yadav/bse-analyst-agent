@@ -98,8 +98,6 @@ def _pick(facts: list[dict[str, Any]], aliases: tuple[str, ...], end: str) -> fl
     ]
     if not candidates:
         return None
-    # Prefer exact alias order; CFO ordering intentionally prefers the
-    # operating-activities concept over the less specific operations concept.
     for alias in aliases:
         for fact in candidates:
             if str(fact.get("tag", "")).lower() == alias:
@@ -120,12 +118,13 @@ def _pick_instant(facts: list[dict[str, Any]], aliases: tuple[str, ...], end: st
     return None
 
 
-def _basis(facts: list[dict[str, Any]]) -> str:
-    """Determine reporting basis without guessing from the filing filename.
+def _basis(facts: list[dict[str, Any]], source_file: str | Path | None = None) -> str:
+    """Determine reporting basis from explicit or deterministic filing evidence.
 
-    Some NSE Integrated Filing JSON files omit the explicit
-    nature-of-report tag. In that case, the presence of non-controlling
-    interest facts is deterministic evidence that the filing is consolidated.
+    NSE Integrated Filing JSON can omit the explicit nature-of-report tag.
+    We therefore accept only evidence that identifies consolidated reporting:
+    NCI facts, or owner-of-parent facts that are specific to consolidated
+    presentation. We never infer basis from the filename alone.
     """
     values = set()
     tags = {str(fact.get("tag", "")).lower() for fact in facts}
@@ -142,10 +141,8 @@ def _basis(facts: list[dict[str, Any]]) -> str:
     if len(values) == 1:
         return next(iter(values))
     if len(values) > 1:
-        raise ValueError(f"Conflicting reporting basis facts: {sorted(values)}")
+        raise ValueError(f"{source_file or 'raw NSE facts'}: conflicting reporting basis facts: {sorted(values)}")
 
-    # Consolidated statements expose NCI attribution. This is stronger
-    # evidence than assuming a basis from the filename or source label.
     nci_tags = {
         "profitorlossattributabletononcontrollinginterests",
         "noncontrollinginterests",
@@ -153,9 +150,27 @@ def _basis(facts: list[dict[str, Any]]) -> str:
     if tags & nci_tags:
         return "consolidated"
 
+    # Older NSE files may omit both the explicit basis tag and NCI facts.
+    # These owner-of-parent concepts are specific to consolidated reporting
+    # and provide deterministic evidence without relying on the filename.
+    consolidated_only_tags = {
+        "profitorlossattributabletoownersofparent",
+        "profitlossattributabletoownersofparent",
+        "profitlossattributabletoownersofparentcompany",
+        "equityattributabletoownersofparent",
+        "equityattributabletoownersoftheparent",
+    }
+    if tags & consolidated_only_tags:
+        return "consolidated"
+
+    hint_tags = sorted(
+        tag for tag in tags
+        if any(token in tag for token in ("natureofreport", "consolidated", "standalone", "noncontrolling", "ownersofparent"))
+    )
     raise ValueError(
-        "Unable to determine reporting basis from raw NSE facts; "
-        "explicit basis or NCI evidence is required"
+        f"{source_file or 'raw NSE facts'}: unable to determine reporting basis; "
+        f"no explicit basis or consolidated-only evidence found. "
+        f"basis-related tags={hint_tags}"
     )
 
 
@@ -184,13 +199,15 @@ def normalize_raw_file(path: str | Path) -> list[FinancialHistoryRow]:
     if not fiscal_year:
         raise ValueError(f"Unable to determine fiscal year: {path}")
 
-    basis = _basis(facts)
+    basis = _basis(facts, path)
     year = fiscal_year[2:]
     end = f"{year}-03-31"
 
     revenue = _pick(facts, REVENUE_TAGS, end)
     pat_owner = _pick(facts, PAT_OWNER_TAGS, end)
     pat_total = _pick(facts, PAT_TOTAL_TAGS, end)
+    capex = _pick(facts, CAPEX_TAGS, end)
+    equity_total = _pick_instant(facts, EQUITY_TOTAL_TAGS, end)
     row = FinancialHistoryRow(
         fiscal_year=fiscal_year,
         basis=basis,
@@ -202,14 +219,10 @@ def normalize_raw_file(path: str | Path) -> list[FinancialHistoryRow]:
         ebit=_pick(facts, EBIT_TAGS, end),
         pbt=_pick(facts, PBT_TAGS, end),
         cfo=_pick(facts, CFO_TAGS, end),
-        capex=abs(_pick(facts, CAPEX_TAGS, end)) if _pick(facts, CAPEX_TAGS, end) is not None else None,
+        capex=abs(capex) if capex is not None else None,
         debt=_debt(facts, end),
         cash=_pick_instant(facts, CASH_TAGS, end),
-        equity=(
-            _pick_instant(facts, EQUITY_TOTAL_TAGS, end)
-            if _pick_instant(facts, EQUITY_TOTAL_TAGS, end) is not None
-            else _pick_instant(facts, EQUITY_OWNER_TAGS, end)
-        ),
+        equity=equity_total if equity_total is not None else _pick_instant(facts, EQUITY_OWNER_TAGS, end),
         equity_owner=_pick_instant(facts, EQUITY_OWNER_TAGS, end),
         confidence="unvalidated",
     )
