@@ -284,7 +284,7 @@ def build_from_raw(
     # filings are deliberately excluded before normalization.
     by_year: dict[str, list[Path]] = {}
     for path in files:
-        match = re.fullmatch(r"FY(20\\d{2})", path.stem)
+        match = re.fullmatch(r"FY(20\d{2})", path.stem)
         if not match:
             continue
         by_year.setdefault(path.stem, []).append(path)
