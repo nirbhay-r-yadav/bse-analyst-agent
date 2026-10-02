@@ -20,6 +20,14 @@ class AnnualReportDownloader(Protocol):
         ...
 
 
+class FinancialHistorySource(Protocol):
+    def discover(self, symbol: str) -> Sequence[Mapping[str, Any]]:
+        ...
+
+    def build_history(self, symbol: str) -> Sequence[Mapping[str, Any]]:
+        ...
+
+
 class DocumentExtractor(Protocol):
     def extract_critical_sections(self) -> Mapping[str, str]:
         ...
@@ -71,6 +79,11 @@ PUBLIC_MODULE_APIS = {
     "valuation": "src.financial_tools.calculate_pe_valuation",
     "recommendation": "src.financial_tools.determine_final_recommendation",
     "annual_report": "src.nse_downloader.NSEDownloader.download_report",
+    "annual_report_history": "src.build_financial_history.build",
+    "annual_report_inventory": "src.annual_report_inventory.build_inventory",
+    "financial_history": "src.financial_history.FinancialHistoryStore",
+    "financial_history_adapter": "src.financial_history_adapter.to_company_history",
+    "business_analysis": "src.business_analysis.BusinessAnalysisEngine.analyze",
     "document_parser": "src.doc_parser.FinancialDocParser.extract_critical_sections",
     "stock_research": "src.stock_research_engine.StockResearchEngine.analyze",
     "deep_scan": "src.deep_scanner.DeepScannerEngine.run",
