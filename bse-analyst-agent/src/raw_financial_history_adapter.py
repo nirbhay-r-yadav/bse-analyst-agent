@@ -200,10 +200,10 @@ def _basis(facts: list[dict[str, Any]], source_file: str | Path | None = None) -
         tag for tag in tags
         if any(token in tag for token in ("natureofreport", "consolidated", "standalone", "noncontrolling", "ownersofparent"))
     )
-    raise ValueError(
-        f"{source_file or 'raw NSE facts'}: unable to determine reporting basis; "
-        f"no explicit basis or consolidated-only evidence found. basis-related tags={hint_tags}"
-    )
+    # Some older NSE Integrated Filing XBRL documents genuinely contain no basis metadata.
+    # Do not manufacture a standalone/consolidated answer; retain the row as unresolved
+    # so a higher-authority annual-report source can reconcile it later.
+    return "unknown"
 
 
 def _debt(facts: list[dict[str, Any]], end: str) -> float | None:
@@ -256,7 +256,7 @@ def normalize_raw_file(path: str | Path) -> list[FinancialHistoryRow]:
         cash=_pick_instant(facts, CASH_TAGS, end),
         equity=equity_total if equity_total is not None else _pick_instant(facts, EQUITY_OWNER_TAGS, end),
         equity_owner=_pick_instant(facts, EQUITY_OWNER_TAGS, end),
-        confidence="unvalidated",
+        confidence="unvalidated" if basis == "unknown" else "validated",
     )
     errors = FinancialHistoryStore.validate_row(row)
     missing = [field for field in FinancialHistoryStore.REQUIRED_FIELDS if getattr(row, field) is None]
@@ -264,7 +264,6 @@ def normalize_raw_file(path: str | Path) -> list[FinancialHistoryRow]:
         raise ValueError(f"{path}: invalid normalized row: {errors}")
     if missing:
         raise ValueError(f"{path}: missing required fields: {missing}")
-    row.confidence = "validated"
     return [row]
 
 
