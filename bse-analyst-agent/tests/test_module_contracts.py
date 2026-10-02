@@ -14,7 +14,7 @@ def test_public_module_api_contract_is_complete():
         "annual_report_history",
         "annual_report_inventory",
         "financial_history",
-        "financial_history_adapter",
+        "financial_history_adapter",\n        "business_analysis",
         "document_parser",
         "stock_research",
         "deep_scan",
