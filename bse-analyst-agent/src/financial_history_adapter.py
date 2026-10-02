@@ -36,7 +36,7 @@ def to_company_history(
                 else row.equity
             ),
             cash_equivalents=row.cash,
-            cfo=row.cfo,
+            cfo=row.cfo,\n            capex=row.capex,
         )
         for row in selected[-10:]
     ]
