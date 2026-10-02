@@ -153,17 +153,25 @@ class BusinessAnalysisEngine:
         return destination
 
     def _reports(self, symbol: str) -> list[tuple[str, Path]]:
-        directory = self.reports_root / symbol
-        if not directory.exists():
-            return []
+        """Discover annual reports from the configured root and downloader cache."""
+        roots = [self.reports_root]
+        download_root = Path("data/downloads")
+        if download_root != self.reports_root:
+            roots.append(download_root)
 
         by_year: dict[int, Path] = {}
-        for path in sorted(directory.glob("*.pdf")):
-            years = [int(x) for x in re.findall(r"20\d{2}", path.name)]
-            if not years:
+        for root in roots:
+            directory = root / symbol
+            if not directory.exists():
                 continue
-            fiscal_year = max(years)
-            by_year[fiscal_year] = path
+            for path in sorted(directory.glob("*.pdf")):
+                years = [int(x) for x in re.findall(r"20\d{2}", path.name)]
+                if not years:
+                    continue
+                fiscal_year = max(years)
+                # Prefer the configured research root when both contain a year.
+                if fiscal_year not in by_year or root == self.reports_root:
+                    by_year[fiscal_year] = path
 
         return [
             (f"FY{year}", by_year[year])
