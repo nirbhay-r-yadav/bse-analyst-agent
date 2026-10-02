@@ -97,7 +97,7 @@ Rules:
 - Identify changes over time rather than repeating the same statement for every year.
 - Explain the business model, industry, customers, products/services, competitive position, strategy, growth drivers, management, and business risks in plain language.
 - Identify persistent risks versus emerging risks.
-- Treat management promises as commitments that must be tracked across years. If execution cannot be established from the supplied evidence, say so.
+- Treat management promises as commitments that must be tracked across years. For each material promise, state the year first identified, the latest observable status (completed/ongoing/delayed/changed/not established), the supporting evidence and any variance. If execution cannot be established from the supplied evidence, say so.
 - Prefer concise, specific conclusions with source years/pages.
 - A meaningful report is more important than a large number of evidence items.
 
