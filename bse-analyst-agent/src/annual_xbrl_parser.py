@@ -33,7 +33,7 @@ TAG_ALIASES = {
         "profitbeforetax",
         "profitbeforetaxandexceptionalitems",
     ),
-    "cfo": (
+    "capex": (\n        "purchaseofpropertyplantandequipmentclassifiedasinvestingactivities",\n        "purchaseofpropertyplantandequipment",\n        "paymentsforpropertyplantandequipment",\n    ),\n    "cfo": (
         "cashflowsfromusedinoperatingactivities",
         "cashflowsfromusedinoperations",
         "cashflowsfromoperatingactivities",
@@ -241,7 +241,7 @@ class AnnualXBRLParser:
                     "pat_owner": pat_owner,
                     "ebit": cls._match(annual, TAG_ALIASES["ebit"], end),
                     "pbt": cls._match(annual, TAG_ALIASES["pbt"], end),
-                    "cfo": cls._match(annual, TAG_ALIASES["cfo"], end),
+                    "cfo": cls._match(annual, TAG_ALIASES["cfo"], end),\n                    "capex": (abs(cls._match(annual, TAG_ALIASES["capex"], end)) if cls._match(annual, TAG_ALIASES["capex"], end) is not None else None),
                     "debt": cls._match(annual, TAG_ALIASES["debt"], end),
                     "cash": cls._match(annual, TAG_ALIASES["cash"], end),
                     "equity": equity_total if equity_total is not None else equity_owner,
