@@ -83,6 +83,8 @@ Rules:
 - Financial statements and valuation are out of scope. You may mention business-relevant non-financial metrics or strategic targets when disclosed.
 - If evidence is absent, return an empty list rather than guessing.
 
+Extract, where supported by the text: business model; products/services and customers; industry/market; competitive position and moat; strategy; growth drivers; qualitative economics/revenue model/cost drivers; capital allocation and capital absorption; management; business risks; and explicit management promises.
+
 Return structured JSON matching the requested schema.
 """
 
