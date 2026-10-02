@@ -1,5 +1,6 @@
 import json
 
+from src.nse_raw_filing_selector import rank_primary_filings, select_primary_filing
 from src.raw_financial_history_adapter import normalize_raw_file
 
 
@@ -75,3 +76,78 @@ def test_normalize_legacy_nse_shape_without_basis(tmp_path):
     assert row.confidence == "unvalidated"
     assert row.revenue == 100.0
     assert row.pat == 10.0
+
+
+def test_segment_only_nse_filing_is_rejected(tmp_path):
+    facts = [
+        _fact(
+            "otherexpenses",
+            "1150000000",
+            start="2019-01-01",
+            end="2019-03-31",
+            dimensions=True,
+        ),
+        _fact(
+            "segmentrevenue",
+            "5520000000",
+            start="2019-01-01",
+            end="2019-03-31",
+            dimensions=True,
+        ),
+        _fact(
+            "segmentliabilities",
+            "0",
+            instant="2019-03-31",
+            dimensions=True,
+        ),
+    ]
+    path = tmp_path / "FY2019.json"
+    path.write_text(
+        json.dumps({"fiscal_year": "FY2019", "facts": facts}),
+        encoding="utf-8",
+    )
+
+    assert rank_primary_filings([path], "FY2019") == []
+    try:
+        select_primary_filing([path], "FY2019")
+    except ValueError as exc:
+        assert "no suitable primary financial-statement XBRL filing found" in str(exc)
+    else:
+        raise AssertionError("segment-only filing must not be selected")
+
+
+def test_primary_filing_is_preferred_over_segment_only(tmp_path):
+    segment = tmp_path / "FY2019_segment.json"
+    primary = tmp_path / "FY2019_primary.json"
+
+    segment_facts = [
+        _fact(
+            "segmentrevenue",
+            "100000000",
+            start="2018-04-01",
+            end="2019-03-31",
+            dimensions=True,
+        ),
+        _fact(
+            "segmentliabilities",
+            "0",
+            instant="2019-03-31",
+            dimensions=True,
+        ),
+    ]
+    primary_facts = [
+        _fact("revenuefromoperations", "1000000000", start="2018-04-01", end="2019-03-31"),
+        _fact("profitlossforperiod", "100000000", start="2018-04-01", end="2019-03-31"),
+        _fact("cashandcashequivalents", "300000000", instant="2019-03-31"),
+    ]
+
+    segment.write_text(
+        json.dumps({"fiscal_year": "FY2019", "facts": segment_facts}),
+        encoding="utf-8",
+    )
+    primary.write_text(
+        json.dumps({"fiscal_year": "FY2019", "facts": primary_facts}),
+        encoding="utf-8",
+    )
+
+    assert select_primary_filing([segment, primary], "FY2019") == primary
